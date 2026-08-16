@@ -1,250 +1,229 @@
-/**
- * DashboardView — Landing page showing hackathon overview and blockchain info
- */
 import { useEffect, useState } from 'react';
 import { useWeb3 } from '../hooks/useWeb3';
 import {
-  Activity, Users, FolderKanban, Trophy, Shield, Link2,
-  Globe, Lock, Eye, Zap, AlertCircle, RefreshCw, Sparkles, BrainCircuit, Bot
+  Activity, Users, FolderKanban, Trophy, Shield,
+  Lock, Eye, Zap, AlertCircle, RefreshCw,
+  CheckCircle2, ArrowRight, FileCheck, Gavel, Database
 } from 'lucide-react';
 
+const PHASES = [
+  { num: 0, label: 'Setup',      desc: 'Team applications & judge onboarding' },
+  { num: 1, label: 'Commit',     desc: 'Blind score hash submission' },
+  { num: 2, label: 'Reveal',     desc: 'Hash verification & score unblinding' },
+  { num: 3, label: 'Finalized',  desc: 'Rankings locked, NFTs mintable' },
+];
+
+const FEATURES = [
+  { icon: Lock,       title: 'Blind Scoring',         desc: 'Commit-reveal hash pattern eliminates score-anchoring bias between judges.' },
+  { icon: Eye,        title: 'Trimmed Mean',           desc: 'Outlier judges are dropped automatically (n≥3). One corrupt score can\'t swing the result.' },
+  { icon: Shield,     title: 'Conflict Recusal',       desc: 'Mentors and conflicted judges are blocked at the EVM level — not just warned.' },
+  { icon: Gavel,      title: 'Dispute Appeals',        desc: 'On-chain appeals block finalization. Admin must resolve every dispute before locking.' },
+  { icon: Trophy,     title: 'Soulbound NFTs',         desc: 'Winners receive non-transferable ERC-721 certificates with on-chain SVG rendering.' },
+  { icon: FileCheck,  title: 'Immutable Audit Log',    desc: 'Every score emits a permanent, publicly indexed smart contract event.' },
+];
+
 export default function DashboardView({ setActiveTab }) {
-  const { contract, hackathonInfo, isConnected, loadHackathonInfo, isLoadingInfo, contractAddress, networkName, account, accountRole } = useWeb3();
+  const {
+    contract, hackathonInfo, isConnected, loadHackathonInfo,
+    isLoadingInfo, networkName, dbStatus, redisStatus,
+  } = useWeb3();
+
   const [blockNumber, setBlockNumber] = useState(null);
-  const [recentEvents, setRecentEvents] = useState([]);
+  const [disputeCount, setDisputeCount] = useState(0);
 
   useEffect(() => {
-    loadLatestBlock();
-    loadRecentEvents();
+    if (!contract) return;
+    (async () => {
+      try {
+        const bn = await contract.runner.provider.getBlockNumber();
+        setBlockNumber(bn);
+        const dc = await contract.pendingDisputeCount();
+        setDisputeCount(Number(dc));
+      } catch {}
+    })();
   }, [contract]);
 
-  const loadLatestBlock = async () => {
-    if (!contract) return;
-    try {
-      const provider = contract.runner.provider;
-      const bn = await provider.getBlockNumber();
-      setBlockNumber(bn);
-    } catch {}
-  };
-
-  const loadRecentEvents = async () => {
-    if (!contract) return;
-    try {
-      const filter = contract.filters.ScoreSubmitted();
-      const events = await contract.queryFilter(filter, -50);
-      setRecentEvents(events.slice(-5).reverse());
-    } catch {}
-  };
-
-  const WHY_BLOCKCHAIN = [
-    {
-      icon: <Lock size={20} />,
-      color: '#6c63ff',
-      title: 'Immutable Records',
-      desc: 'Once a judge submits a score, it cannot be altered or deleted — by anyone, including the organizer.'
-    },
-    {
-      icon: <Eye size={20} />,
-      color: '#00d4ff',
-      title: 'Transparent Verification',
-      desc: 'Anyone can independently verify all judging records by querying the blockchain — no trust required.'
-    },
-    {
-      icon: <Shield size={20} />,
-      color: '#00e5a0',
-      title: 'Tamper Resistance',
-      desc: 'Smart contract rules are enforced by the blockchain network — no central party can override them.'
-    },
-    {
-      icon: <Users size={20} />,
-      color: '#ff6b8a',
-      title: 'Wallet-Based Identity',
-      desc: 'Judge authorization is cryptographically enforced. Only registered wallet addresses can submit scores.'
-    },
-    {
-      icon: <Globe size={20} />,
-      color: '#ffb347',
-      title: 'Decentralized Trust',
-      desc: 'Results are determined by code, not administrators. The leaderboard reflects on-chain data directly.'
-    },
-    {
-      icon: <Zap size={20} />,
-      color: '#6c63ff',
-      title: 'Audit Trail',
-      desc: 'Every judging action emits an on-chain event with timestamp — a permanent, verifiable audit log.'
-    },
-  ];
+  const phase = hackathonInfo?.phase ?? 0;
 
   return (
     <div>
-      {/* Hero */}
-      <div className="hero-section">
-        <div className="flex items-center gap-md mb-md" style={{ flexWrap: 'wrap' }}>
-          <span className="ai-badge">
-            <Sparkles size={12} className="ai-sparkle-icon" /> AI Copilot Enhanced
-          </span>
-          <span className="badge badge-active">
-            <Activity size={10} />
-            {hackathonInfo?.active ? 'Judging Open' : 'Setup Mode'}
-          </span>
-          {isConnected && (
-            <span className="badge badge-category">
-              <Link2 size={10} />
-              {networkName}
+      {/* ── Hero ── */}
+      <div className="hero-section mb-6">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div className="flex items-center flex-wrap gap-2">
+            <span className={`badge ${hackathonInfo?.active ? 'badge-active' : 'badge-pending'}`}>
+              <Activity size={10} />
+              {hackathonInfo?.active ? 'Live' : 'Setup'}
             </span>
-          )}
+            {networkName && (
+              <span className="badge badge-default">
+                <Zap size={10} />
+                {networkName}
+              </span>
+            )}
+            {dbStatus && (
+              <span className="badge badge-active" title="Database status">
+                <Database size={10} />
+                {dbStatus}
+              </span>
+            )}
+            {redisStatus && (
+              <span className="badge badge-info" title="Cache status">
+                <Zap size={10} />
+                {redisStatus}
+              </span>
+            )}
+          </div>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => loadHackathonInfo()}
+            disabled={isLoadingInfo}
+            aria-label="Refresh chain data"
+          >
+            <RefreshCw size={13} className={isLoadingInfo ? 'spin' : ''} />
+            Refresh
+          </button>
         </div>
+
         <h1 className="hero-title">
-          {hackathonInfo?.name || 'ChainJudge — Blockchain & AI Platform'}
+          {hackathonInfo?.name || 'Web3 AI Innovation Hackathon 2026'}
         </h1>
-        <p className="hero-description">
-          Next-generation decentralized hackathon judging powered by <strong>Solidity Smart Contracts</strong> and <strong>AI Evaluation Copilots</strong>.
-          Transparent, tamper-proof, and audit-ready.
+        <p className="hero-description mt-2">
+          {hackathonInfo?.description ||
+            'End-to-end decentralized judging — blind scoring, trimmed-mean math, on-chain disputes, and Soulbound certificates.'}
         </p>
 
         {!isConnected && (
-          <div style={{
-            marginTop: '20px',
-            padding: '12px 16px',
-            background: 'rgba(255,179,71,0.1)',
-            border: '1px solid rgba(255,179,71,0.3)',
-            borderRadius: 'var(--radius-md)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            fontSize: '0.85rem',
-            color: 'var(--color-accent-warning)'
-          }}>
-            <AlertCircle size={16} />
-            Connect a wallet or select a demo account from <strong>"Demo Accounts"</strong> in the top-right to explore the platform.
+          <div className="alert alert-warning mt-4">
+            <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 2 }} />
+            <span>
+              Use <strong>Demo Accounts</strong> in the top bar to switch between Admin, Judge, and Participant roles.
+            </span>
           </div>
         )}
       </div>
 
-      {/* Stats */}
-      {hackathonInfo && (
-        <div className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-icon" style={{ background: 'rgba(108,99,255,0.15)' }}>
-              <FolderKanban size={20} color="var(--color-accent-primary)" />
-            </div>
-            <div className="stat-value">{hackathonInfo.numProjects}</div>
+      {/* ── Stats ── */}
+      <div className="stats-grid mb-6">
+        <div className="stat-card">
+          <div className="stat-icon" style={{ background: 'var(--c-brand-dim)', color: 'var(--c-brand)' }}>
+            <FolderKanban size={18} />
+          </div>
+          <div>
+            <div className="stat-value">{hackathonInfo?.numProjects ?? '—'}</div>
             <div className="stat-label">Projects</div>
           </div>
-          <div className="stat-card">
-            <div className="stat-icon" style={{ background: 'rgba(0,212,255,0.15)' }}>
-              <Users size={20} color="var(--color-accent-secondary)" />
-            </div>
-            <div className="stat-value">{hackathonInfo.numJudges}</div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon" style={{ background: 'var(--c-sky-dim)', color: 'var(--c-sky)' }}>
+            <Users size={18} />
+          </div>
+          <div>
+            <div className="stat-value">{hackathonInfo?.numJudges ?? '—'}</div>
             <div className="stat-label">Judges</div>
           </div>
-          <div className="stat-card">
-            <div className="stat-icon" style={{ background: 'rgba(0,229,160,0.15)' }}>
-              <Activity size={20} color="var(--color-accent-success)" />
-            </div>
-            <div className="stat-value">{blockNumber ?? '—'}</div>
-            <div className="stat-label">Block Height</div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-icon" style={{ background: 'var(--c-green-dim)', color: 'var(--c-green)' }}>
+            <Activity size={18} />
           </div>
-          <div className="stat-card">
-            <div className="stat-icon" style={{ background: 'rgba(255,107,138,0.15)' }}>
-              <Trophy size={20} color="var(--color-accent-tertiary)" />
-            </div>
-            <div className="stat-value">{recentEvents.length > 0 ? recentEvents.length : '—'}</div>
-            <div className="stat-label">Recent Scores</div>
+          <div>
+            <div className="stat-value">{blockNumber != null ? blockNumber.toLocaleString() : '—'}</div>
+            <div className="stat-label">EVM Block</div>
           </div>
         </div>
-      )}
 
-      {/* Contract Info */}
-      {isConnected && (
-        <div className="card mb-lg">
-          <div className="card-header">
-            <h3 className="card-title flex items-center gap-sm">
-              <Link2 size={16} color="var(--color-accent-secondary)" />
-              Deployed Contract
-            </h3>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => { loadHackathonInfo(); loadLatestBlock(); loadRecentEvents(); }}
-              disabled={isLoadingInfo}
-            >
-              <RefreshCw size={13} className={isLoadingInfo ? 'spin' : ''} />
-              Refresh
-            </button>
+        <div className="stat-card">
+          <div
+            className="stat-icon"
+            style={{
+              background: disputeCount > 0 ? 'var(--c-red-dim)' : 'var(--c-raised)',
+              color: disputeCount > 0 ? 'var(--c-red)' : 'var(--t-muted)',
+            }}
+          >
+            <Shield size={18} />
           </div>
-          <div className="info-grid">
-            <div className="info-item">
-              <span className="info-item-label">Contract Address</span>
-              <span className="info-item-value">{contractAddress}</span>
-            </div>
-            <div className="info-item">
-              <span className="info-item-label">Network</span>
-              <span className="info-item-value">{networkName}</span>
-            </div>
-            <div className="info-item">
-              <span className="info-item-label">Connected As</span>
-              <span className="info-item-value">{account}</span>
-            </div>
-            <div className="info-item">
-              <span className="info-item-label">Your Role</span>
-              <span className={`role-badge ${accountRole}`} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
-                {accountRole}
-              </span>
-            </div>
-            {hackathonInfo && (
-              <div className="info-item">
-                <span className="info-item-label">Admin Address</span>
-                <span className="info-item-value">{hackathonInfo.adminAddress}</span>
+          <div>
+            <div className="stat-value">{disputeCount}</div>
+            <div className="stat-label">Disputes</div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Phase stepper ── */}
+      <div className="card mb-6">
+        <div className="card-header">
+          <div>
+            <div className="card-title">Hackathon Lifecycle</div>
+            <div className="card-subtitle">Current: Phase {phase} — {hackathonInfo?.phaseName || PHASES[phase]?.label}</div>
+          </div>
+          <span className="badge badge-brand">Phase {phase} of 3</span>
+        </div>
+        <div className="phase-stepper">
+          {PHASES.map((p) => {
+            const done   = phase > p.num;
+            const active = phase === p.num;
+            return (
+              <div
+                key={p.num}
+                className={`stepper-step${active ? ' active' : done ? ' completed' : ''}`}
+              >
+                <div className="stepper-num">
+                  {done && <CheckCircle2 size={11} style={{ display: 'inline', marginRight: 3 }} />}
+                  Phase {p.num}
+                </div>
+                <div className="stepper-label">{p.label}</div>
+                <div className="text-xs text-muted mt-2">{p.desc}</div>
               </div>
-            )}
-            <div className="info-item">
-              <span className="info-item-label">Latest Block</span>
-              <span className="info-item-value">{blockNumber ?? 'Loading...'}</span>
-            </div>
-          </div>
+            );
+          })}
         </div>
-      )}
+      </div>
 
-      {/* Why Blockchain */}
-      <h2 className="section-title">
-        <Shield size={18} color="var(--color-accent-primary)" />
-        Why Blockchain for Judging?
-      </h2>
-      <div className="projects-grid mb-xl">
-        {WHY_BLOCKCHAIN.map((item, i) => (
-          <div key={i} className="card">
-            <div style={{
-              width: 40, height: 40, borderRadius: 'var(--radius-md)',
-              background: item.color + '18',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: item.color, marginBottom: 'var(--space-md)'
-            }}>
-              {item.icon}
+      {/* ── Features grid ── */}
+      <div className="section-label mb-3">Protocol capabilities</div>
+      <div className="projects-grid mb-6">
+        {FEATURES.map(({ icon: Icon, title, desc }, i) => (
+          <div key={i} className="card card-sm">
+            <div
+              style={{
+                width: 34, height: 34,
+                borderRadius: 'var(--r-md)',
+                background: 'var(--c-brand-dim)',
+                color: 'var(--c-brand)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                marginBottom: 'var(--s-3)',
+              }}
+            >
+              <Icon size={16} />
             </div>
-            <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: 6 }}>{item.title}</h4>
-            <p style={{ fontSize: '0.82rem', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>{item.desc}</p>
+            <div style={{ fontWeight: 600, fontSize: '0.875rem', marginBottom: 4 }}>{title}</div>
+            <p className="text-sm text-secondary" style={{ lineHeight: 1.55 }}>{desc}</p>
           </div>
         ))}
       </div>
 
-      {/* Quick actions */}
-      <div className="two-col-grid">
-        <div className="card" style={{ background: 'rgba(108,99,255,0.08)', borderColor: 'rgba(108,99,255,0.2)' }}>
-          <h3 className="card-title mb-sm">View Projects</h3>
-          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-md)' }}>
-            Browse all registered hackathon teams and their project descriptions.
+      {/* ── Quick actions ── */}
+      <div className="two-col">
+        <div className="card">
+          <div className="card-title mb-2">Projects Directory</div>
+          <p className="text-sm text-secondary mb-4" style={{ lineHeight: 1.55 }}>
+            Browse teams, verify IPFS pitch CIDs, and submit applications.
           </p>
           <button className="btn btn-primary btn-sm" onClick={() => setActiveTab('projects')}>
-            <FolderKanban size={14} /> Browse Projects
+            Browse <ArrowRight size={13} />
           </button>
         </div>
-        <div className="card" style={{ background: 'rgba(0,229,160,0.06)', borderColor: 'rgba(0,229,160,0.2)' }}>
-          <h3 className="card-title mb-sm">Leaderboard</h3>
-          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-md)' }}>
-            View real-time rankings generated directly from on-chain score aggregation.
+
+        <div className="card">
+          <div className="card-title mb-2">Judging Console</div>
+          <p className="text-sm text-secondary mb-4" style={{ lineHeight: 1.55 }}>
+            Commit score hashes in Phase 1, then reveal salt-verified scores in Phase 2.
           </p>
-          <button className="btn btn-success btn-sm" onClick={() => setActiveTab('leaderboard')}>
-            <Trophy size={14} /> View Leaderboard
+          <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('judging')}>
+            Open Console <ArrowRight size={13} />
           </button>
         </div>
       </div>

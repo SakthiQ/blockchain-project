@@ -1,10 +1,9 @@
 /**
- * TxHistoryView — Blockchain transaction log / event explorer
- * Shows all ScoreSubmitted events with full on-chain data
+ * TxHistoryView — On-Chain Event Explorer & Audit Log (HackerRank Style)
  */
 import { useEffect, useState } from 'react';
 import { useWeb3 } from '../hooks/useWeb3';
-import { History, ExternalLink, RefreshCw, Blocks, Activity } from 'lucide-react';
+import { History, RefreshCw, Activity, ExternalLink } from 'lucide-react';
 
 export default function TxHistoryView() {
   const { contract, getReadOnlyContract } = useWeb3();
@@ -28,11 +27,9 @@ export default function TxHistoryView() {
       const fromBlock = Math.max(0, latestBlock - 10000);
       setBlockRange(`${fromBlock} – ${latestBlock}`);
 
-      // Query all ScoreSubmitted events
       const scoreFilter = c.filters.ScoreSubmitted();
       const scoreEvents = await c.queryFilter(scoreFilter, fromBlock);
 
-      // Also query HackathonConfigured, ProjectRegistered, JudgeStatusChanged
       const hackFilter = c.filters.HackathonConfigured();
       const projFilter = c.filters.ProjectRegistered();
       const judgeFilter = c.filters.JudgeStatusChanged();
@@ -43,13 +40,12 @@ export default function TxHistoryView() {
         c.queryFilter(judgeFilter, fromBlock),
       ]);
 
-      // Combine and annotate all events
       const allEvents = [
         ...hackEvents.map(e => ({ ...e, type: 'HackathonConfigured', parsed: c.interface.parseLog(e) })),
         ...projEvents.map(e => ({ ...e, type: 'ProjectRegistered', parsed: c.interface.parseLog(e) })),
         ...judgeEvents.map(e => ({ ...e, type: 'JudgeStatusChanged', parsed: c.interface.parseLog(e) })),
         ...scoreEvents.map(e => ({ ...e, type: 'ScoreSubmitted', parsed: c.interface.parseLog(e) })),
-      ].sort((a, b) => b.blockNumber - a.blockNumber); // newest first
+      ].sort((a, b) => b.blockNumber - a.blockNumber);
 
       setEvents(allEvents);
     } catch (err) {
@@ -61,49 +57,38 @@ export default function TxHistoryView() {
     }
   };
 
-  const EVENT_STYLES = {
-    ScoreSubmitted:      { color: '#6c63ff', bg: 'rgba(108,99,255,0.1)', label: 'Score Submitted' },
-    ProjectRegistered:   { color: '#00d4ff', bg: 'rgba(0,212,255,0.1)',  label: 'Project Registered' },
-    HackathonConfigured: { color: '#00e5a0', bg: 'rgba(0,229,160,0.1)', label: 'Hackathon Configured' },
-    JudgeStatusChanged:  { color: '#ff6b8a', bg: 'rgba(255,107,138,0.1)', label: 'Judge Status Changed' },
-  };
-
   const renderEventDetails = (event) => {
     const args = event.parsed?.args;
     if (!args) return null;
     switch (event.type) {
       case 'ScoreSubmitted':
         return (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', fontSize: '0.78rem', color: 'var(--color-text-secondary)' }}>
-            <span><strong style={{ color: 'var(--color-text-primary)' }}>Project:</strong> #{args[0]?.toString()}</span>
-            <span><strong style={{ color: 'var(--color-text-primary)' }}>Judge:</strong> {args[1]?.slice(0,10)}...</span>
-            <span><strong style={{ color: 'var(--color-text-primary)' }}>Tech:</strong> {args[2]?.toString()}</span>
-            <span><strong style={{ color: 'var(--color-text-primary)' }}>Innov:</strong> {args[3]?.toString()}</span>
-            <span><strong style={{ color: 'var(--color-text-primary)' }}>UX:</strong> {args[4]?.toString()}</span>
-            <span><strong style={{ color: 'var(--color-text-primary)' }}>Impact:</strong> {args[5]?.toString()}</span>
-            <span><strong style={{ color: 'var(--color-accent-primary)' }}>Total:</strong> {args[6]?.toString()}/40</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', fontSize: '0.78rem', color: 'var(--color-text-secondary)' }}>
+            <span>Project: <strong>#{args[0]?.toString()}</strong></span>
+            <span>Judge: <span className="text-mono">{args[1]?.slice(0,8)}...</span></span>
+            <span>Tech: <strong>{args[2]?.toString()}</strong></span>
+            <span>Innov: <strong>{args[3]?.toString()}</strong></span>
+            <span>UX: <strong>{args[4]?.toString()}</strong></span>
+            <span>Impact: <strong>{args[5]?.toString()}</strong></span>
+            <span>Total Score: <strong style={{ color: 'var(--color-primary)' }}>{args[6]?.toString()} / 1000</strong></span>
           </div>
         );
       case 'ProjectRegistered':
         return (
           <div style={{ fontSize: '0.78rem', color: 'var(--color-text-secondary)' }}>
-            <strong style={{ color: 'var(--color-text-primary)' }}>#{args[0]?.toString()}</strong> — {args[1]} |
-            Team: {args[2]} | Category: {args[3]}
+            Registered <strong>#{args[0]?.toString()} {args[1]}</strong> | Lead: {args[2]} | Category: {args[3]}
           </div>
         );
       case 'HackathonConfigured':
         return (
           <div style={{ fontSize: '0.78rem', color: 'var(--color-text-secondary)' }}>
-            Hackathon: <strong style={{ color: 'var(--color-text-primary)' }}>{args[0]}</strong>
+            Title: <strong>{args[0]}</strong>
           </div>
         );
       case 'JudgeStatusChanged':
         return (
           <div style={{ fontSize: '0.78rem', color: 'var(--color-text-secondary)' }}>
-            Judge: <strong style={{ color: 'var(--color-text-primary)' }}>{args[1]}</strong> ({args[0]?.slice(0,10)}...) —{' '}
-            <span style={{ color: args[2] ? 'var(--color-accent-success)' : 'var(--color-accent-danger)' }}>
-              {args[2] ? 'Authorized' : 'Revoked'}
-            </span>
+            Judge <span className="text-mono">{args[0]?.slice(0,8)}...</span> ({args[1]}) status set to <strong>{args[2] ? 'Authorized' : 'Revoked'}</strong>
           </div>
         );
       default:
@@ -113,96 +98,83 @@ export default function TxHistoryView() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-lg">
+      <div className="flex items-center justify-between mb-lg flex-wrap gap-md">
         <div>
           <h1 className="page-title">
-            <History size={24} style={{ display: 'inline', marginRight: 10, verticalAlign: 'middle' }} />
-            Blockchain Transaction Log
+            <History size={24} style={{ display: 'inline', marginRight: 8, verticalAlign: 'middle', color: 'var(--color-primary)' }} />
+            On-Chain Event Explorer &amp; Audit Log
           </h1>
           <p className="page-subtitle">
-            All on-chain events emitted by the HackathonJudging contract. This is the immutable audit trail.
-            {blockRange && <span style={{ fontFamily: 'var(--font-mono)', marginLeft: 8 }}>Blocks {blockRange}</span>}
+            Permanent transaction log querying on-chain smart contract events (Blocks {blockRange || 'Loading'}).
           </p>
         </div>
+
         <button className="btn btn-secondary btn-sm" onClick={loadEvents} disabled={loading}>
-          <RefreshCw size={13} className={loading ? 'spin' : ''} />
-          Refresh
+          <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh Events
         </button>
       </div>
 
       {error && (
         <div style={{
-          padding: 'var(--space-md)',
-          background: 'rgba(255,77,106,0.1)',
-          border: '1px solid rgba(255,77,106,0.3)',
-          borderRadius: 'var(--radius-md)',
-          color: 'var(--color-accent-danger)',
-          marginBottom: 'var(--space-lg)',
-          fontSize: '0.85rem'
+          padding: 'var(--space-md)', background: 'var(--color-danger-subtle)',
+          border: '1px solid var(--color-danger-border)', borderRadius: 'var(--radius-md)',
+          color: 'var(--color-danger)', marginBottom: 'var(--space-lg)', fontSize: '0.85rem'
         }}>
           {error}
         </div>
       )}
 
-      {loading ? (
-        <div className="loading-overlay">
-          <div className="spinner" style={{ width: 32, height: 32 }} />
-          <p>Fetching on-chain events...</p>
+      <div className="card">
+        <div className="card-header mb-md">
+          <h3 className="card-title flex items-center gap-sm">
+            <Activity size={16} color="var(--color-primary)" /> Smart Contract Log Stream ({events.length} Events)
+          </h3>
         </div>
-      ) : events.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-state-icon"><Blocks size={28} /></div>
-          <div className="empty-state-title">No Events Found</div>
-          <div className="empty-state-desc">
-            No contract events found in the recent block range. Deploy the contract and run the seed script to populate data.
+
+        {loading ? (
+          <div className="loading-overlay">
+            <div className="spinner" style={{ width: 24, height: 24 }} />
+            <p>Querying logs from local EVM node...</p>
           </div>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {events.map((event, i) => {
-            const style = EVENT_STYLES[event.type] || EVENT_STYLES.ScoreSubmitted;
-            return (
-              <div key={i} className="card" style={{ padding: 'var(--space-md)', transition: 'none' }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-md)' }}>
-                  {/* Event type badge */}
-                  <div style={{
-                    width: 10, borderRadius: 4, alignSelf: 'stretch',
-                    background: style.color, flexShrink: 0, minHeight: 40
-                  }} />
-
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)', flexWrap: 'wrap', marginBottom: 6 }}>
-                      <span style={{
-                        fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase',
-                        letterSpacing: '0.06em', color: style.color,
-                        background: style.bg, padding: '2px 8px', borderRadius: 4
-                      }}>
-                        {style.label}
+        ) : events.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state-icon"><History size={24} /></div>
+            <div className="empty-state-title">No Contract Events Logged Yet</div>
+            <div className="empty-state-desc">
+              Submit a score or register a project to produce real-time on-chain events.
+            </div>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Block</th>
+                  <th>Event Type</th>
+                  <th>Transaction Hash</th>
+                  <th>Event Payload Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map((e, idx) => (
+                  <tr key={idx}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>#{e.blockNumber}</td>
+                    <td>
+                      <span className={`badge ${e.type === 'ScoreSubmitted' ? 'badge-active' : 'badge-category'}`}>
+                        {e.type}
                       </span>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>
-                        Block #{event.blockNumber}
-                      </span>
-                      {event.transactionHash && (
-                        <span
-                          className="tx-hash"
-                          onClick={() => navigator.clipboard?.writeText(event.transactionHash)}
-                          title="Click to copy transaction hash"
-                        >
-                          <ExternalLink size={9} />
-                          {event.transactionHash.slice(0, 20)}...
-                        </span>
-                      )}
-                    </div>
-                    {renderEventDetails(event)}
-                  </div>
-
-                  <Activity size={14} color="var(--color-text-muted)" style={{ flexShrink: 0 }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                    </td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                      {e.transactionHash?.slice(0, 12)}...
+                    </td>
+                    <td>{renderEventDetails(e)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

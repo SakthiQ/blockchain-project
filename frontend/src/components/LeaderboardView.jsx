@@ -1,46 +1,47 @@
-/**
- * LeaderboardView — Real-time on-chain leaderboard with rankings and score breakdown
- */
 import { useEffect, useState } from 'react';
 import { useWeb3 } from '../hooks/useWeb3';
-import { Trophy, RefreshCw, Gavel, BarChart3, Info, Sparkles, BrainCircuit, ShieldCheck, Zap } from 'lucide-react';
+import {
+  Trophy, RefreshCw, BarChart3, ShieldCheck, Zap,
+  Award, ExternalLink, AlertTriangle, CheckCircle2, Users, Medal
+} from 'lucide-react';
 
 export default function LeaderboardView() {
-  const { contract, getReadOnlyContract } = useWeb3();
+  const { contract, account, hackathonInfo, addToast, getReadOnlyContract } = useWeb3();
   const [leaderboard, setLeaderboard] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [lastRefresh, setLastRefresh] = useState(null);
+  const [mintingRank, setMintingRank] = useState(null);
+  const [minJudges, setMinJudges] = useState(2);
 
-  const RANK_LABELS = ['🥇', '🥈', '🥉'];
-  const CATEGORY_COLORS = {
-    DeFi: '#6c63ff', HealthTech: '#00e5a0', EdTech: '#00d4ff',
-    Sustainability: '#ffb347', AI: '#ff6b8a', default: '#8892b0',
-  };
+  const isFinalized = hackathonInfo && hackathonInfo.phase === 3;
 
   const loadLeaderboard = async () => {
     const c = contract || getReadOnlyContract();
-    if (!c) { setError('No blockchain connection available.'); return; }
+    if (!c) { setError('No blockchain connection.'); return; }
     setLoading(true);
     setError('');
     try {
-      const entries = await c.getLeaderboard();
+      const [entries, minJ] = await Promise.all([
+        c.getLeaderboard(),
+        c.minJudgesForRanking(),
+      ]);
+      setMinJudges(Number(minJ));
       const parsed = entries.map((e, idx) => ({
         rank: idx + 1,
         projectId: Number(e.projectId),
         projectName: e.projectName,
         teamLead: e.teamLead,
         category: e.category,
-        averageScore: Number(e.averageScore),    // * 100 precision from contract
+        ipfsCID: e.ipfsCID,
+        averageScore: Number(e.averageScore),
+        trimmedScore: Number(e.trimmedScore),
         judgeCount: Number(e.judgeCount),
         totalScore: Number(e.totalScore),
+        quorumMet: e.quorumMet,
       }));
       setLeaderboard(parsed);
-      setLastRefresh(new Date());
     } catch (err) {
-      setError(err.message?.includes('ECONNREFUSED')
-        ? 'Cannot reach blockchain node. Is the Hardhat node running?'
-        : 'Failed to load leaderboard: ' + err.message);
+      setError('Failed to load leaderboard: ' + err.message);
     } finally {
       setLoading(false);
     }
@@ -48,245 +49,193 @@ export default function LeaderboardView() {
 
   useEffect(() => { loadLeaderboard(); }, [contract]);
 
-  const formatAvg = (avgX100) => {
-    if (avgX100 === 0) return '—';
-    return (avgX100 / 100).toFixed(2);
+  const handleMintNFT = async (projectId, rank) => {
+    if (!contract) return;
+    setMintingRank(rank);
+    try {
+      const tx = await contract.mintWinnerNFT(projectId, rank);
+      addToast('info', 'Minting NFT', `Minting Soulbound Winner Certificate (Rank #${rank})...`);
+      await tx.wait();
+      addToast('success', 'NFT Certificate Minted!', `Rank #${rank} Soulbound Certificate issued on-chain!`);
+    } catch (err) {
+      addToast('error', 'NFT Mint Failed', err.reason || err.message);
+    } finally {
+      setMintingRank(null);
+    }
   };
 
-  // Max score for percentage bar — 40 (max total) per judge
-  const maxAvgX100 = Math.max(...leaderboard.map(e => e.averageScore), 1);
+  const formatAvg = (valX100) => (valX100 / 100).toFixed(2);
+
+  const ranked = leaderboard.filter(e => e.quorumMet);
+  const provisional = leaderboard.filter(e => !e.quorumMet);
+
+  const renderTiebreakerHint = (e, prev) => {
+    if (!prev || e.trimmedScore !== prev.trimmedScore) return null;
+    return (
+      <span title="Tie-broken by judge count → projectId" style={{
+        marginLeft: 6, fontSize: '0.65rem', color: 'var(--color-warning)',
+        background: 'var(--color-warning-subtle)', padding: '1px 6px',
+        borderRadius: 'var(--radius-xs)', border: '1px solid var(--color-warning-border)',
+        fontWeight: 600
+      }}>
+        TIE-BROKEN
+      </span>
+    );
+  };
+
+  const renderRankBadge = (rank) => {
+    if (rank === 1) return <span style={{ color: '#f59e0b', fontWeight: 700 }}>🥇 #1</span>;
+    if (rank === 2) return <span style={{ color: '#94a3b8', fontWeight: 700 }}>🥈 #2</span>;
+    if (rank === 3) return <span style={{ color: '#d97706', fontWeight: 700 }}>🥉 #3</span>;
+    return <span style={{ color: 'var(--color-text-muted)', fontWeight: 600 }}>#{rank}</span>;
+  };
+
+  const renderTable = (entries, provisional = false) => (
+    <div style={{ overflowX: 'auto' }}>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Project Title</th>
+            <th>Category</th>
+            <th>IPFS Proof</th>
+            <th style={{ textAlign: 'center' }}>Raw Avg</th>
+            <th style={{ textAlign: 'center' }}>Trimmed Score</th>
+            <th style={{ textAlign: 'center' }}>Judges</th>
+            {isFinalized && !provisional && <th style={{ textAlign: 'center' }}>Winner NFT</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((e, idx) => (
+            <tr key={e.projectId}>
+              <td style={{ fontSize: '0.9rem' }}>
+                {provisional ? <span style={{ color: 'var(--color-warning)', fontSize: '0.8rem', fontWeight: 600 }}>P#{idx + 1}</span> : renderRankBadge(e.rank)}
+                {renderTiebreakerHint(e, entries[idx - 1])}
+              </td>
+              <td>
+                <strong>{e.projectName}</strong>
+                <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)' }}>Lead: {e.teamLead}</div>
+              </td>
+              <td><span className="badge badge-category">{e.category}</span></td>
+              <td>
+                {e.ipfsCID ? (
+                  <a
+                    href={`https://ipfs.io/ipfs/${e.ipfsCID}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ fontSize: '0.75rem', color: 'var(--color-primary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                  >
+                    {e.ipfsCID.slice(0, 10)}... <ExternalLink size={10} />
+                  </a>
+                ) : (
+                  <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>On-Chain</span>
+                )}
+              </td>
+              <td style={{ textAlign: 'center' }}>{formatAvg(e.averageScore)}</td>
+              <td style={{ textAlign: 'center', fontWeight: 700, color: provisional ? 'var(--color-warning)' : 'var(--color-success)' }}>
+                {formatAvg(e.trimmedScore)}
+              </td>
+              <td style={{ textAlign: 'center' }}>
+                <span className="flex items-center justify-center gap-xs">
+                  <Users size={12} color="var(--color-text-muted)" />
+                  {e.judgeCount}
+                </span>
+              </td>
+              {isFinalized && !provisional && (
+                <td style={{ textAlign: 'center' }}>
+                  {e.rank <= 3 ? (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => handleMintNFT(e.projectId, e.rank)}
+                      disabled={mintingRank === e.rank}
+                    >
+                      <Award size={12} /> Mint Rank #{e.rank} NFT
+                    </button>
+                  ) : (
+                    <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>—</span>
+                  )}
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-lg">
+      <div className="flex items-center justify-between mb-lg flex-wrap gap-md">
         <div>
           <h1 className="page-title">
-            <Trophy size={24} style={{ display: 'inline', marginRight: 10, verticalAlign: 'middle', color: '#ffd700' }} />
-            Live Leaderboard
+            <Trophy size={24} style={{ display: 'inline', marginRight: 8, verticalAlign: 'middle', color: 'var(--color-warning)' }} />
+            Leaderboard &amp; Winner Certificates
           </h1>
           <p className="page-subtitle">
-            Rankings generated directly from on-chain aggregate scores. Average of all judge totals per project.
+            Trimmed mean score aggregation (dropping min &amp; max outliers when ≥3 judges score). Quorum requirement: ≥<strong>{minJudges}</strong> judge scores.
           </p>
         </div>
-        <div className="flex items-center gap-sm">
-          {lastRefresh && (
-            <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>
-              Updated {lastRefresh.toLocaleTimeString()}
-            </span>
-          )}
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={loadLeaderboard}
-            disabled={loading}
-          >
-            <RefreshCw size={13} className={loading ? 'spin' : ''} />
-            Refresh
-          </button>
-        </div>
+        <button className="btn btn-secondary btn-sm" onClick={loadLeaderboard} disabled={loading}>
+          <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh
+        </button>
       </div>
-
-      {/* AI Executive Summary & Anomaly Scan */}
-      {leaderboard.length > 0 && (
-        <div className="ai-copilot-card mb-lg">
-          <div className="flex items-center justify-between mb-sm">
-            <span className="ai-badge">
-              <Sparkles size={12} className="ai-sparkle-icon" /> AI Executive Insight
-            </span>
-            <span className="badge badge-active" style={{ fontSize: '0.7rem' }}>
-              <ShieldCheck size={11} /> 0 Score Anomalies Detected
-            </span>
-          </div>
-
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: 6, fontFamily: 'var(--font-display)' }}>
-            AI Winner Prediction & Standout Analysis
-          </h3>
-
-          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 'var(--space-md)' }}>
-            Based on {leaderboard.reduce((a, b) => a + b.judgeCount, 0)} on-chain score submissions across {leaderboard.length} projects,{' '}
-            <strong style={{ color: 'var(--color-text-primary)' }}>{leaderboard[0]?.projectName}</strong> leads with an average score of{' '}
-            <strong style={{ color: 'var(--color-accent-secondary)' }}>{formatAvg(leaderboard[0]?.averageScore)}/40</strong>, driven by exceptional ratings in{' '}
-            <em>{leaderboard[0]?.category}</em>. Score variance across judges is exceptionally low (<strong>&lt; 4.2%</strong>), confirming high consensus.
-          </p>
-
-          <div style={{ display: 'flex', gap: 'var(--space-md)', flexWrap: 'wrap' }}>
-            <div className="ai-insight-tag">
-              <BrainCircuit size={12} /> High Consensus Index: 95.8%
-            </div>
-            <div className="ai-insight-tag">
-              <Zap size={12} /> Cryptographic Proof: Verifiable On-Chain
-            </div>
-            <div className="ai-insight-tag">
-              <ShieldCheck size={12} /> Duplicate Votes Blocked: 100%
-            </div>
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div style={{
-          padding: 'var(--space-md)',
-          background: 'rgba(255,77,106,0.1)',
-          border: '1px solid rgba(255,77,106,0.3)',
-          borderRadius: 'var(--radius-md)',
-          color: 'var(--color-accent-danger)',
-          marginBottom: 'var(--space-lg)',
-          fontSize: '0.85rem'
-        }}>
-          {error}
-        </div>
-      )}
 
       {loading ? (
         <div className="loading-overlay">
-          <div className="spinner" style={{ width: 32, height: 32 }} />
-          <p>Querying on-chain scores...</p>
-        </div>
-      ) : leaderboard.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-state-icon"><BarChart3 size={28} /></div>
-          <div className="empty-state-title">No Results Yet</div>
-          <div className="empty-state-desc">
-            No projects or scores have been recorded yet. Run the seed script or submit scores as an authorized judge.
-          </div>
+          <div className="spinner" style={{ width: 24, height: 24 }} />
+          <p>Querying on-chain leaderboard entries...</p>
         </div>
       ) : (
-        <div>
-          {/* Top 3 podium cards */}
-          <div style={{ display: 'flex', gap: 'var(--space-md)', marginBottom: 'var(--space-lg)', flexWrap: 'wrap' }}>
-            {leaderboard.slice(0, 3).map((entry, i) => {
-              const rankColors = [
-                { bg: 'rgba(255,215,0,0.1)', border: 'rgba(255,215,0,0.3)', text: '#ffd700' },
-                { bg: 'rgba(192,192,192,0.1)', border: 'rgba(192,192,192,0.3)', text: '#c0c0c0' },
-                { bg: 'rgba(205,127,50,0.1)', border: 'rgba(205,127,50,0.3)', text: '#cd7f32' },
-              ];
-              const rc = rankColors[i];
-              return (
-                <div key={entry.projectId} className="card" style={{
-                  flex: '1', minWidth: 200,
-                  background: rc.bg, borderColor: rc.border,
-                  textAlign: 'center', padding: 'var(--space-lg)'
-                }}>
-                  <div style={{ fontSize: '2.5rem', marginBottom: 'var(--space-sm)' }}>
-                    {RANK_LABELS[i]}
-                  </div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: rc.text, fontFamily: 'var(--font-display)', marginBottom: 4 }}>
-                    {entry.projectName}
-                  </div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-sm)' }}>
-                    {entry.teamLead}
-                  </div>
-                  <div style={{
-                    fontSize: '1.75rem', fontWeight: 800,
-                    fontFamily: 'var(--font-display)',
-                    background: 'var(--gradient-primary)',
-                    WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text'
-                  }}>
-                    {formatAvg(entry.averageScore)}
-                  </div>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>
-                    avg / 40 · {entry.judgeCount} judges
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Full table */}
-          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div style={{
-              padding: 'var(--space-md) var(--space-lg)',
-              borderBottom: '1px solid var(--color-border-subtle)',
-              display: 'flex', alignItems: 'center', gap: 'var(--space-sm)'
-            }}>
-              <BarChart3 size={16} color="var(--color-accent-primary)" />
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 600 }}>Full Rankings</h3>
+        <>
+          {/* Ranked Section */}
+          <div className="card mb-lg">
+            <div className="card-header mb-md">
+              <h3 className="card-title flex items-center gap-sm">
+                <CheckCircle2 size={16} color="var(--color-success)" />
+                Ranked Entries
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 400, marginLeft: 6 }}>
+                  (Quorum Met — ≥{minJudges} Judge Scores)
+                </span>
+              </h3>
+              {isFinalized && (
+                <span className="badge badge-active">
+                  🏆 Finalized — Winner Certificates Ready
+                </span>
+              )}
             </div>
 
-            <table className="leaderboard-table" style={{ padding: 'var(--space-sm)' }}>
-              <thead>
-                <tr>
-                  <td style={{ padding: '8px 20px', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-muted)' }}>Rank</td>
-                  <td style={{ padding: '8px 20px', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-muted)' }}>Project</td>
-                  <td style={{ padding: '8px 20px', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-muted)' }}>Team</td>
-                  <td style={{ padding: '8px 20px', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-muted)' }}>Category</td>
-                  <td style={{ padding: '8px 20px', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-muted)' }}>Avg Score</td>
-                  <td style={{ padding: '8px 20px', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-muted)' }}>
-                    <Gavel size={12} style={{ verticalAlign: 'middle' }} /> Judges
-                  </td>
-                </tr>
-              </thead>
-              <tbody>
-                {leaderboard.map(entry => {
-                  const catColor = CATEGORY_COLORS[entry.category] || CATEGORY_COLORS.default;
-                  const rankClass = entry.rank <= 3 ? `rank-${entry.rank}` : 'rank-other';
-                  const barPct = maxAvgX100 > 0 ? Math.round((entry.averageScore / maxAvgX100) * 100) : 0;
-
-                  return (
-                    <tr key={entry.projectId} className="leaderboard-row">
-                      <td>
-                        <div className={`rank-badge ${rankClass}`}>{entry.rank}</div>
-                      </td>
-                      <td>
-                        <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{entry.projectName}</div>
-                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--color-text-muted)' }}>
-                          Project #{entry.projectId}
-                        </div>
-                      </td>
-                      <td style={{ color: 'var(--color-text-secondary)', fontSize: '0.85rem' }}>
-                        {entry.teamLead}
-                      </td>
-                      <td>
-                        <span className="badge" style={{
-                          background: catColor + '18', color: catColor,
-                          border: `1px solid ${catColor}30`
-                        }}>
-                          {entry.category}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="score-bar-container">
-                          <div className="score-bar">
-                            <div className="score-bar-fill" style={{ width: `${barPct}%` }} />
-                          </div>
-                          <span className="score-display">
-                            {formatAvg(entry.averageScore)}
-                          </span>
-                        </div>
-                      </td>
-                      <td>
-                        <span style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 4,
-                          fontSize: '0.8rem', color: 'var(--color-text-secondary)'
-                        }}>
-                          {entry.judgeCount} {entry.judgeCount === 1 ? 'judge' : 'judges'}
-                          {entry.judgeCount === 0 && (
-                            <span className="badge badge-pending" style={{ marginLeft: 4 }}>pending</span>
-                          )}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            {ranked.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-state-icon"><BarChart3 size={24} /></div>
+                <div className="empty-state-title">No Ranked Entries Yet</div>
+                <div className="empty-state-desc">
+                  At least {minJudges} judge score(s) required per project to qualify for official ranking.
+                </div>
+              </div>
+            ) : (
+              renderTable(ranked, false)
+            )}
           </div>
 
-          {/* Scoring methodology note */}
-          <div style={{
-            marginTop: 'var(--space-lg)',
-            padding: 'var(--space-md)',
-            background: 'var(--color-bg-glass)',
-            border: '1px solid var(--color-border-subtle)',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '0.8rem',
-            color: 'var(--color-text-secondary)'
-          }}>
-            <strong style={{ color: 'var(--color-text-primary)' }}>Scoring Methodology:</strong>{' '}
-            Each judge submits scores for 4 criteria (Technical Quality, Innovation, User Experience, Impact), each 0–10.
-            A judge's total = sum of 4 criteria (max 40). Project Average = arithmetic mean of all judge totals × 100 (stored as integer for precision).
-            Ties are currently displayed in registration order. Projects with no scores show "—".
-          </div>
-        </div>
+          {/* Provisional Section */}
+          {provisional.length > 0 && (
+            <div className="card" style={{ borderColor: 'var(--color-warning-border)' }}>
+              <div className="card-header mb-sm">
+                <h3 className="card-title flex items-center gap-sm" style={{ color: 'var(--color-warning)' }}>
+                  <AlertTriangle size={16} />
+                  Provisional Submissions
+                  <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 400, marginLeft: 6 }}>
+                    (Awaiting Quorum — &lt;{minJudges} Judge Scores)
+                  </span>
+                </h3>
+              </div>
+              <p style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-md)' }}>
+                These submissions have fewer than {minJudges} judge score(s). They remain in the provisional queue until additional judges complete evaluation.
+              </p>
+              {renderTable(provisional, true)}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

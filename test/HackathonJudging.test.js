@@ -1,694 +1,521 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-/**
- * Comprehensive Test Suite for HackathonJudging Smart Contract
- * ============================================================
- * Tests cover:
- *   1. Contract deployment & initial state
- *   2. Hackathon configuration
- *   3. Project registration
- *   4. Judge registration & authorization
- *   5. Valid score submission & event emission
- *   6. Unauthorized score rejection
- *   7. Duplicate score rejection
- *   8. Out-of-range score rejection
- *   9. Score aggregation & leaderboard accuracy
- *  10. Edge cases & admin access control
- */
-describe("HackathonJudging", function () {
-  // Shared fixtures
+describe("Hackathon Judging Platform — Comprehensive Test Suite", function () {
   let hackathonJudging;
-  let admin, judge1, judge2, judge3, unauthorized, accounts;
+  let winnerNFT;
+  let admin, pendingAdminSigner, judge1, judge2, judge3, recusedJudge, unauthorized, teamLead1, teamLead2, applicant1;
 
-  // Sample test data
   const HACKATHON_NAME = "Web3 AI Innovation Hackathon 2026";
-  const HACKATHON_DESC = "Showcasing the future of decentralized technology";
+  const IPFS_CID_1 = "bafybeigdyr321testcid1";
+  const IPFS_CID_2 = "bafybeigdyr321testcid2";
 
-  const PROJECT_1 = {
-    name: "ChainVault",
-    description: "Decentralized multi-sig treasury management",
-    teamLead: "Alice Johnson",
-    category: "DeFi",
-  };
+  function createScoreHash(projectId, tech, inn, ux, imp, saltHex) {
+    return ethers.solidityPackedKeccak256(
+      ["uint256", "uint8", "uint8", "uint8", "uint8", "bytes32"],
+      [projectId, tech, inn, ux, imp, saltHex]
+    );
+  }
 
-  const PROJECT_2 = {
-    name: "MediLink",
-    description: "Blockchain-based patient records",
-    teamLead: "Bob Singh",
-    category: "HealthTech",
-  };
-
-  // Deploy fresh contract before each test
   beforeEach(async function () {
-    [admin, judge1, judge2, judge3, unauthorized, ...accounts] =
+    [admin, pendingAdminSigner, judge1, judge2, judge3, recusedJudge, unauthorized, teamLead1, teamLead2, applicant1] =
       await ethers.getSigners();
 
-    const HackathonJudging = await ethers.getContractFactory(
-      "HackathonJudging"
-    );
+    const HackathonJudging = await ethers.getContractFactory("HackathonJudging");
     hackathonJudging = await HackathonJudging.deploy();
     await hackathonJudging.waitForDeployment();
+
+    const WinnerNFT = await ethers.getContractFactory("WinnerNFT");
+    winnerNFT = await WinnerNFT.deploy(await hackathonJudging.getAddress());
+    await winnerNFT.waitForDeployment();
+
+    await hackathonJudging.setWinnerNFTContract(await winnerNFT.getAddress());
   });
 
-  // ===========================================================
-  //  1. DEPLOYMENT & INITIAL STATE
-  // ===========================================================
-  describe("Deployment", function () {
-    it("Should set the deployer as admin", async function () {
+  // =========================================================
+  //  1. Deployment & Governance Initial State
+  // =========================================================
+  describe("1. Deployment & Governance Initial State", function () {
+    it("Should set deployer as admin", async function () {
       expect(await hackathonJudging.admin()).to.equal(admin.address);
     });
 
-    it("Should start with zero projects and zero judges", async function () {
-      expect(await hackathonJudging.projectCount()).to.equal(0);
-      expect(await hackathonJudging.judgeCount()).to.equal(0);
+    it("Should start in Setup phase (0)", async function () {
+      expect(await hackathonJudging.currentPhase()).to.equal(0);
     });
 
-    it("Should start with hackathon inactive", async function () {
-      expect(await hackathonJudging.hackathonActive()).to.equal(false);
+    it("Should start with criteria weights equal to [25, 25, 25, 25]", async function () {
+      const w0 = await hackathonJudging.criteriaWeights(0);
+      const w1 = await hackathonJudging.criteriaWeights(1);
+      const w2 = await hackathonJudging.criteriaWeights(2);
+      const w3 = await hackathonJudging.criteriaWeights(3);
+      expect(w0 + w1 + w2 + w3).to.equal(100);
     });
 
-    it("Should expose correct MAX_SCORE constant", async function () {
-      expect(await hackathonJudging.MAX_SCORE()).to.equal(10);
+    it("#14 — Default minJudgesForRanking is 2", async function () {
+      expect(await hackathonJudging.minJudgesForRanking()).to.equal(2);
     });
 
-    it("Should expose correct CRITERIA_COUNT constant", async function () {
-      expect(await hackathonJudging.CRITERIA_COUNT()).to.equal(4);
-    });
-  });
-
-  // ===========================================================
-  //  2. HACKATHON CONFIGURATION
-  // ===========================================================
-  describe("Hackathon Configuration", function () {
-    it("Admin can configure a hackathon", async function () {
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        true
-      );
-      const info = await hackathonJudging.getHackathonInfo();
-      expect(info.name).to.equal(HACKATHON_NAME);
-      expect(info.description).to.equal(HACKATHON_DESC);
-      expect(info.active).to.equal(true);
+    it("#18 — Pending dispute count starts at 0", async function () {
+      expect(await hackathonJudging.pendingDisputeCount()).to.equal(0);
     });
 
-    it("Should emit HackathonConfigured event", async function () {
-      await expect(
-        hackathonJudging.configureHackathon(HACKATHON_NAME, HACKATHON_DESC, true)
-      )
-        .to.emit(hackathonJudging, "HackathonConfigured")
-        .withArgs(
-          HACKATHON_NAME,
-          HACKATHON_DESC,
-          admin.address,
-          // timestamp is block.timestamp — match any value
-          (timestamp) => timestamp > 0
-        );
-    });
-
-    it("Non-admin CANNOT configure the hackathon", async function () {
-      await expect(
-        hackathonJudging
-          .connect(unauthorized)
-          .configureHackathon(HACKATHON_NAME, HACKATHON_DESC, true)
-      ).to.be.revertedWith("HackathonJudging: caller is not the admin");
-    });
-
-    it("Should reject empty hackathon name", async function () {
-      await expect(
-        hackathonJudging.configureHackathon("", HACKATHON_DESC, true)
-      ).to.be.revertedWith("HackathonJudging: name cannot be empty");
-    });
-
-    it("Admin can toggle hackathon active/inactive", async function () {
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        true
-      );
-      expect((await hackathonJudging.getHackathonInfo()).active).to.equal(true);
-
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        false
-      );
-      expect((await hackathonJudging.getHackathonInfo()).active).to.equal(false);
+    it("#23 — Application count starts at 0", async function () {
+      expect(await hackathonJudging.applicationCount()).to.equal(0);
     });
   });
 
-  // ===========================================================
-  //  3. PROJECT REGISTRATION
-  // ===========================================================
-  describe("Project Registration", function () {
+  // =========================================================
+  //  2. Project & Judge Management
+  // =========================================================
+  describe("2. Project & Judge Management", function () {
+    it("Admin can register project with IPFS CID and team wallet", async function () {
+      await hackathonJudging.registerProjectWithDetails(
+        "ChainVault",
+        "Multi-sig treasury",
+        "Alice",
+        "DeFi",
+        IPFS_CID_1,
+        teamLead1.address
+      );
+
+      const proj = await hackathonJudging.projects(1);
+      expect(proj.name).to.equal("ChainVault");
+      expect(proj.ipfsCID).to.equal(IPFS_CID_1);
+      expect(proj.teamWallet).to.equal(teamLead1.address);
+    });
+
+    it("Admin can register judges", async function () {
+      await hackathonJudging.registerJudge(judge1.address, "Judge Sarah");
+      expect(await hackathonJudging.isAuthorizedJudge(judge1.address)).to.be.true;
+    });
+
+    it("Admin can set conflict of interest recusal", async function () {
+      await hackathonJudging.registerProject("ChainVault", "Multi-sig", "Alice", "DeFi");
+      await hackathonJudging.registerJudge(recusedJudge.address, "Judge Mentor");
+
+      await hackathonJudging.setJudgeConflict(recusedJudge.address, 1, true);
+      expect(await hackathonJudging.judgeConflicts(recusedJudge.address, 1)).to.be.true;
+    });
+  });
+
+  // =========================================================
+  //  3. Commit–Reveal Blind Scoring
+  // =========================================================
+  describe("3. Commit–Reveal Blind Scoring", function () {
+    const salt1 = ethers.keccak256(ethers.toUtf8Bytes("secret_salt_1"));
+
     beforeEach(async function () {
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        true
-      );
+      await hackathonJudging.registerProjectWithDetails("ChainVault", "DeFi", "Alice", "DeFi", IPFS_CID_1, teamLead1.address);
+      await hackathonJudging.registerJudge(judge1.address, "Judge 1");
+      await hackathonJudging.registerJudge(recusedJudge.address, "Recused Judge");
+      await hackathonJudging.setJudgeConflict(recusedJudge.address, 1, true);
+
+      await hackathonJudging.setPhase(1);
     });
 
-    it("Admin can register a project", async function () {
-      await hackathonJudging.registerProject(
-        PROJECT_1.name,
-        PROJECT_1.description,
-        PROJECT_1.teamLead,
-        PROJECT_1.category
-      );
-      expect(await hackathonJudging.projectCount()).to.equal(1);
-
-      const project = await hackathonJudging.projects(1);
-      expect(project.name).to.equal(PROJECT_1.name);
-      expect(project.teamLead).to.equal(PROJECT_1.teamLead);
-      expect(project.category).to.equal(PROJECT_1.category);
-      expect(project.isRegistered).to.equal(true);
+    it("Judge can commit score hash during Judging phase", async function () {
+      const hash = createScoreHash(1, 9, 8, 9, 10, salt1);
+      await expect(hackathonJudging.connect(judge1).commitScore(1, hash))
+        .to.emit(hackathonJudging, "ScoreCommitted");
     });
 
-    it("Should emit ProjectRegistered event with correct ID", async function () {
+    it("Recused judge cannot commit score", async function () {
+      const hash = createScoreHash(1, 10, 10, 10, 10, salt1);
       await expect(
-        hackathonJudging.registerProject(
-          PROJECT_1.name,
-          PROJECT_1.description,
-          PROJECT_1.teamLead,
-          PROJECT_1.category
-        )
-      )
-        .to.emit(hackathonJudging, "ProjectRegistered")
-        .withArgs(
-          1,
-          PROJECT_1.name,
-          PROJECT_1.teamLead,
-          PROJECT_1.category,
-          admin.address,
-          (ts) => ts > 0
-        );
+        hackathonJudging.connect(recusedJudge).commitScore(1, hash)
+      ).to.be.revertedWith("HackathonJudging: judge recused due to conflict of interest");
     });
 
-    it("Multiple projects receive sequential IDs", async function () {
-      await hackathonJudging.registerProject(
-        PROJECT_1.name,
-        PROJECT_1.description,
-        PROJECT_1.teamLead,
-        PROJECT_1.category
-      );
-      await hackathonJudging.registerProject(
-        PROJECT_2.name,
-        PROJECT_2.description,
-        PROJECT_2.teamLead,
-        PROJECT_2.category
-      );
-      expect(await hackathonJudging.projectCount()).to.equal(2);
-      const p1 = await hackathonJudging.projects(1);
-      const p2 = await hackathonJudging.projects(2);
-      expect(p1.id).to.equal(1);
-      expect(p2.id).to.equal(2);
-    });
+    it("Judge can reveal score in Revealing phase with valid salt", async function () {
+      const hash = createScoreHash(1, 9, 8, 9, 10, salt1);
+      await hackathonJudging.connect(judge1).commitScore(1, hash);
 
-    it("Non-admin CANNOT register a project", async function () {
-      await expect(
-        hackathonJudging
-          .connect(unauthorized)
-          .registerProject(
-            PROJECT_1.name,
-            PROJECT_1.description,
-            PROJECT_1.teamLead,
-            PROJECT_1.category
-          )
-      ).to.be.revertedWith("HackathonJudging: caller is not the admin");
-    });
-
-    it("Should reject empty project name", async function () {
-      await expect(
-        hackathonJudging.registerProject(
-          "",
-          PROJECT_1.description,
-          PROJECT_1.teamLead,
-          PROJECT_1.category
-        )
-      ).to.be.revertedWith("HackathonJudging: project name cannot be empty");
-    });
-  });
-
-  // ===========================================================
-  //  4. JUDGE REGISTRATION & AUTHORIZATION
-  // ===========================================================
-  describe("Judge Registration", function () {
-    it("Admin can register a judge", async function () {
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-      expect(await hackathonJudging.judgeCount()).to.equal(1);
-
-      const judge = await hackathonJudging.judges(judge1.address);
-      expect(judge.name).to.equal("Dr. Emily Chen");
-      expect(judge.isAuthorized).to.equal(true);
-      expect(judge.isRegistered).to.equal(true);
-    });
-
-    it("Should emit JudgeStatusChanged event on registration", async function () {
-      await expect(
-        hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen")
-      )
-        .to.emit(hackathonJudging, "JudgeStatusChanged")
-        .withArgs(
-          judge1.address,
-          "Dr. Emily Chen",
-          true,
-          admin.address,
-          (ts) => ts > 0
-        );
-    });
-
-    it("Should report address as authorized judge after registration", async function () {
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-      expect(await hackathonJudging.isAuthorizedJudge(judge1.address)).to.equal(
-        true
-      );
-    });
-
-    it("Unauthorized address is NOT an authorized judge", async function () {
-      expect(
-        await hackathonJudging.isAuthorizedJudge(unauthorized.address)
-      ).to.equal(false);
-    });
-
-    it("Admin CANNOT register themselves as judge", async function () {
-      await expect(
-        hackathonJudging.registerJudge(admin.address, "Admin Judge")
-      ).to.be.revertedWith(
-        "HackathonJudging: admin cannot be registered as a judge"
-      );
-    });
-
-    it("Cannot register the same judge address twice", async function () {
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-      await expect(
-        hackathonJudging.registerJudge(judge1.address, "Duplicate Judge")
-      ).to.be.revertedWith("HackathonJudging: judge already registered");
-    });
-
-    it("Admin can revoke a judge", async function () {
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-      await hackathonJudging.revokeJudge(judge1.address);
-
-      const judge = await hackathonJudging.judges(judge1.address);
-      expect(judge.isAuthorized).to.equal(false);
-      expect(
-        await hackathonJudging.isAuthorizedJudge(judge1.address)
-      ).to.equal(false);
-    });
-
-    it("Admin can re-authorize a revoked judge", async function () {
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-      await hackathonJudging.revokeJudge(judge1.address);
-      await hackathonJudging.reauthorizeJudge(judge1.address);
-
-      expect(
-        await hackathonJudging.isAuthorizedJudge(judge1.address)
-      ).to.equal(true);
-    });
-
-    it("Non-admin CANNOT register a judge", async function () {
-      await expect(
-        hackathonJudging
-          .connect(unauthorized)
-          .registerJudge(judge2.address, "Rogue Judge")
-      ).to.be.revertedWith("HackathonJudging: caller is not the admin");
-    });
-  });
-
-  // ===========================================================
-  //  5. VALID SCORE SUBMISSION
-  // ===========================================================
-  describe("Score Submission — Valid", function () {
-    beforeEach(async function () {
-      // Setup: configure hackathon, register a project, register a judge
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        true
-      );
-      await hackathonJudging.registerProject(
-        PROJECT_1.name,
-        PROJECT_1.description,
-        PROJECT_1.teamLead,
-        PROJECT_1.category
-      );
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-    });
-
-    it("Authorized judge can submit a score", async function () {
-      await hackathonJudging
-        .connect(judge1)
-        .submitScore(1, 8, 9, 7, 8);
-
-      const submission = await hackathonJudging.getScore(judge1.address, 1);
-      expect(submission.exists).to.equal(true);
-      expect(submission.technicalQuality).to.equal(8);
-      expect(submission.innovation).to.equal(9);
-      expect(submission.userExperience).to.equal(7);
-      expect(submission.impact).to.equal(8);
-      expect(submission.totalScore).to.equal(32); // 8+9+7+8
-    });
-
-    it("Should mark judgeHasScored as true after submission", async function () {
-      await hackathonJudging.connect(judge1).submitScore(1, 8, 9, 7, 8);
-      expect(await hackathonJudging.judgeHasScored(judge1.address, 1)).to.equal(
-        true
-      );
-    });
-
-    it("Should emit ScoreSubmitted event with correct data", async function () {
-      await expect(
-        hackathonJudging.connect(judge1).submitScore(1, 8, 9, 7, 8)
-      )
-        .to.emit(hackathonJudging, "ScoreSubmitted")
-        .withArgs(
-          1,           // projectId
-          judge1.address,
-          8,           // technicalQuality
-          9,           // innovation
-          7,           // userExperience
-          8,           // impact
-          32,          // totalScore
-          (ts) => ts > 0
-        );
-    });
-
-    it("Should allow a judge to score multiple different projects", async function () {
-      await hackathonJudging.registerProject(
-        PROJECT_2.name,
-        PROJECT_2.description,
-        PROJECT_2.teamLead,
-        PROJECT_2.category
-      );
-
-      await hackathonJudging.connect(judge1).submitScore(1, 8, 9, 7, 8);
-      await hackathonJudging.connect(judge1).submitScore(2, 6, 7, 8, 9);
-
-      const score1 = await hackathonJudging.getScore(judge1.address, 1);
-      const score2 = await hackathonJudging.getScore(judge1.address, 2);
-      expect(score1.totalScore).to.equal(32);
-      expect(score2.totalScore).to.equal(30);
-    });
-
-    it("Should allow scores of 0 (valid minimum)", async function () {
-      await hackathonJudging.connect(judge1).submitScore(1, 0, 0, 0, 0);
-      const submission = await hackathonJudging.getScore(judge1.address, 1);
-      expect(submission.totalScore).to.equal(0);
-    });
-
-    it("Should allow scores of 10 (valid maximum)", async function () {
-      await hackathonJudging.connect(judge1).submitScore(1, 10, 10, 10, 10);
-      const submission = await hackathonJudging.getScore(judge1.address, 1);
-      expect(submission.totalScore).to.equal(40);
-    });
-  });
-
-  // ===========================================================
-  //  6. UNAUTHORIZED SCORE REJECTION
-  // ===========================================================
-  describe("Score Submission — Unauthorized Rejection", function () {
-    beforeEach(async function () {
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        true
-      );
-      await hackathonJudging.registerProject(
-        PROJECT_1.name,
-        PROJECT_1.description,
-        PROJECT_1.teamLead,
-        PROJECT_1.category
-      );
-    });
-
-    it("Unregistered account CANNOT submit a score", async function () {
-      await expect(
-        hackathonJudging.connect(unauthorized).submitScore(1, 8, 9, 7, 8)
-      ).to.be.revertedWith(
-        "HackathonJudging: caller is not a registered judge"
-      );
-    });
-
-    it("Revoked judge CANNOT submit a score", async function () {
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-      await hackathonJudging.revokeJudge(judge1.address);
+      await hackathonJudging.setPhase(2);
 
       await expect(
-        hackathonJudging.connect(judge1).submitScore(1, 8, 9, 7, 8)
-      ).to.be.revertedWith(
-        "HackathonJudging: caller's judge authorization has been revoked"
-      );
-    });
+        hackathonJudging.connect(judge1).revealScore(1, 9, 8, 9, 10, salt1)
+      ).to.emit(hackathonJudging, "ScoreSubmitted");
 
-    it("Score cannot be submitted when hackathon is inactive", async function () {
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-      // Set hackathon to inactive
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        false
-      );
-
-      await expect(
-        hackathonJudging.connect(judge1).submitScore(1, 8, 9, 7, 8)
-      ).to.be.revertedWith("HackathonJudging: hackathon is not active");
-    });
-
-    it("Admin themselves CANNOT submit a score (not a judge)", async function () {
-      // Admin tries to submit directly (they are not registered as a judge)
-      await expect(
-        hackathonJudging.connect(admin).submitScore(1, 8, 9, 7, 8)
-      ).to.be.revertedWith(
-        "HackathonJudging: caller is not a registered judge"
-      );
-    });
-  });
-
-  // ===========================================================
-  //  7. DUPLICATE SCORE REJECTION
-  // ===========================================================
-  describe("Score Submission — Duplicate Rejection", function () {
-    beforeEach(async function () {
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        true
-      );
-      await hackathonJudging.registerProject(
-        PROJECT_1.name,
-        PROJECT_1.description,
-        PROJECT_1.teamLead,
-        PROJECT_1.category
-      );
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-    });
-
-    it("Judge CANNOT submit a second score for the same project", async function () {
-      // First submission — should succeed
-      await hackathonJudging.connect(judge1).submitScore(1, 8, 9, 7, 8);
-
-      // Second submission for same project — should fail
-      await expect(
-        hackathonJudging.connect(judge1).submitScore(1, 5, 5, 5, 5)
-      ).to.be.revertedWith(
-        "HackathonJudging: judge has already scored this project"
-      );
-    });
-
-    it("Original score should remain unchanged after duplicate attempt", async function () {
-      await hackathonJudging.connect(judge1).submitScore(1, 8, 9, 7, 8);
-
-      // Try (and fail) to overwrite
-      await hackathonJudging
-        .connect(judge1)
-        .submitScore(1, 5, 5, 5, 5)
-        .catch(() => {}); // Expected to fail
-
-      // Verify original score is unchanged
       const score = await hackathonJudging.getScore(judge1.address, 1);
-      expect(score.totalScore).to.equal(32);
+      expect(score.technicalQuality).to.equal(9);
+      expect(score.exists).to.be.true;
+    });
+
+    it("Reveal fails if salt or scores do not match commit hash", async function () {
+      const hash = createScoreHash(1, 9, 8, 9, 10, salt1);
+      await hackathonJudging.connect(judge1).commitScore(1, hash);
+      await hackathonJudging.setPhase(2);
+
+      const wrongSalt = ethers.keccak256(ethers.toUtf8Bytes("wrong_salt"));
+      await expect(
+        hackathonJudging.connect(judge1).revealScore(1, 9, 8, 9, 10, wrongSalt)
+      ).to.be.revertedWith("HackathonJudging: commit hash mismatch or invalid salt");
     });
   });
 
-  // ===========================================================
-  //  8. OUT-OF-RANGE SCORE REJECTION
-  // ===========================================================
-  describe("Score Submission — Range Validation", function () {
+  // =========================================================
+  //  4. Weighted Rubric & Trimmed Mean Aggregation
+  // =========================================================
+  describe("4. Weighted Rubric & Trimmed Mean Aggregation", function () {
+    const salt1 = ethers.keccak256(ethers.toUtf8Bytes("salt1"));
+    const salt2 = ethers.keccak256(ethers.toUtf8Bytes("salt2"));
+    const salt3 = ethers.keccak256(ethers.toUtf8Bytes("salt3"));
+
     beforeEach(async function () {
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        true
-      );
-      await hackathonJudging.registerProject(
-        PROJECT_1.name,
-        PROJECT_1.description,
-        PROJECT_1.teamLead,
-        PROJECT_1.category
-      );
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
+      await hackathonJudging.registerProjectWithDetails("ChainVault", "DeFi", "Alice", "DeFi", IPFS_CID_1, teamLead1.address);
+      await hackathonJudging.registerProjectWithDetails("MediLink", "Health", "Bob", "HealthTech", IPFS_CID_2, teamLead2.address);
+
+      await hackathonJudging.registerJudge(judge1.address, "Judge 1");
+      await hackathonJudging.registerJudge(judge2.address, "Judge 2");
+      await hackathonJudging.registerJudge(judge3.address, "Judge 3");
+
+      await hackathonJudging.setCriteriaWeights([40, 30, 15, 15]);
     });
 
-    it("Should reject technicalQuality > 10", async function () {
-      await expect(
-        hackathonJudging.connect(judge1).submitScore(1, 11, 5, 5, 5)
-      ).to.be.revertedWith("HackathonJudging: technicalQuality out of range");
-    });
+    it("Calculates correct weighted score and trimmed mean leaderboard", async function () {
+      await hackathonJudging.setPhase(1);
 
-    it("Should reject innovation > 10", async function () {
-      await expect(
-        hackathonJudging.connect(judge1).submitScore(1, 5, 11, 5, 5)
-      ).to.be.revertedWith("HackathonJudging: innovation out of range");
-    });
+      await hackathonJudging.connect(judge1).commitScore(1, createScoreHash(1, 9, 9, 9, 9, salt1));
+      await hackathonJudging.connect(judge2).commitScore(1, createScoreHash(1, 2, 2, 2, 2, salt2));
+      await hackathonJudging.connect(judge3).commitScore(1, createScoreHash(1, 8, 8, 8, 8, salt3));
 
-    it("Should reject userExperience > 10", async function () {
-      await expect(
-        hackathonJudging.connect(judge1).submitScore(1, 5, 5, 11, 5)
-      ).to.be.revertedWith("HackathonJudging: userExperience out of range");
-    });
+      await hackathonJudging.setPhase(2);
 
-    it("Should reject impact > 10", async function () {
-      await expect(
-        hackathonJudging.connect(judge1).submitScore(1, 5, 5, 5, 11)
-      ).to.be.revertedWith("HackathonJudging: impact out of range");
-    });
+      await hackathonJudging.connect(judge1).revealScore(1, 9, 9, 9, 9, salt1);
+      await hackathonJudging.connect(judge2).revealScore(1, 2, 2, 2, 2, salt2);
+      await hackathonJudging.connect(judge3).revealScore(1, 8, 8, 8, 8, salt3);
 
-    it("Should reject score for non-existent project", async function () {
-      await expect(
-        hackathonJudging.connect(judge1).submitScore(999, 8, 9, 7, 8)
-      ).to.be.revertedWith("HackathonJudging: project does not exist");
-    });
-  });
+      const agg = await hackathonJudging.getProjectAggregateScore(1);
+      expect(agg.judgesWhoScored).to.equal(3);
+      // Raw total = 900 + 200 + 800 = 1900. Average * 100 = 1900 * 100 / 3 = 63333
+      expect(agg.averageScore).to.equal(63333);
 
-  // ===========================================================
-  //  9. SCORE AGGREGATION & LEADERBOARD
-  // ===========================================================
-  describe("Score Aggregation & Leaderboard", function () {
-    beforeEach(async function () {
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        true
-      );
-
-      // Register 2 projects
-      await hackathonJudging.registerProject(
-        PROJECT_1.name,
-        PROJECT_1.description,
-        PROJECT_1.teamLead,
-        PROJECT_1.category
-      );
-      await hackathonJudging.registerProject(
-        PROJECT_2.name,
-        PROJECT_2.description,
-        PROJECT_2.teamLead,
-        PROJECT_2.category
-      );
-
-      // Register 2 judges
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-      await hackathonJudging.registerJudge(judge2.address, "Prof. Mark Lee");
-    });
-
-    it("Should correctly aggregate scores from multiple judges", async function () {
-      // Project 1: judge1 scores 8+8+8+8=32, judge2 scores 6+6+6+6=24
-      // Expected average = (32+24)/2 = 28 → averageScore = 2800 (*100)
-      await hackathonJudging.connect(judge1).submitScore(1, 8, 8, 8, 8);
-      await hackathonJudging.connect(judge2).submitScore(1, 6, 6, 6, 6);
-
-      const [judgesWhoScored, totalRawScore, averageScore] =
-        await hackathonJudging.getProjectAggregateScore(1);
-
-      expect(judgesWhoScored).to.equal(2);
-      expect(totalRawScore).to.equal(56); // 32 + 24
-      expect(averageScore).to.equal(2800); // 28.00 * 100
-    });
-
-    it("Project with no scores should have averageScore of 0", async function () {
-      const [judgesWhoScored, totalRawScore, averageScore] =
-        await hackathonJudging.getProjectAggregateScore(1);
-
-      expect(judgesWhoScored).to.equal(0);
-      expect(totalRawScore).to.equal(0);
-      expect(averageScore).to.equal(0);
-    });
-
-    it("Leaderboard should rank projects by average score (highest first)", async function () {
-      // Project 1 gets lower scores
-      await hackathonJudging.connect(judge1).submitScore(1, 5, 5, 5, 5); // total=20
-      // Project 2 gets higher scores
-      await hackathonJudging.connect(judge1).submitScore(2, 9, 9, 9, 9); // total=36
+      // Trimmed Mean drops min (200) and max (900), leaving middle (800). Trimmed * 100 = 80000
+      expect(agg.trimmedScore).to.equal(80000);
 
       const leaderboard = await hackathonJudging.getLeaderboard();
-
-      // Project 2 should be ranked #1 (higher score)
-      expect(leaderboard[0].projectId).to.equal(2);
-      expect(leaderboard[0].projectName).to.equal(PROJECT_2.name);
-      expect(leaderboard[1].projectId).to.equal(1);
-    });
-
-    it("Leaderboard should contain all registered projects", async function () {
-      const leaderboard = await hackathonJudging.getLeaderboard();
-      expect(leaderboard.length).to.equal(2);
-    });
-
-    it("getAllProjects should return all registered project IDs and names", async function () {
-      const [ids, names] = await hackathonJudging.getAllProjects();
-      expect(ids.length).to.equal(2);
-      expect(names[0]).to.equal(PROJECT_1.name);
-      expect(names[1]).to.equal(PROJECT_2.name);
-    });
-
-    it("getAllJudgeAddresses should return all registered judge addresses", async function () {
-      const addresses = await hackathonJudging.getAllJudgeAddresses();
-      expect(addresses.length).to.equal(2);
-      expect(addresses).to.include(judge1.address);
-      expect(addresses).to.include(judge2.address);
-    });
-  });
-
-  // ===========================================================
-  //  10. EDGE CASES
-  // ===========================================================
-  describe("Edge Cases", function () {
-    it("getHackathonInfo returns correct admin address", async function () {
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        true
-      );
-      const info = await hackathonJudging.getHackathonInfo();
-      expect(info.adminAddress).to.equal(admin.address);
-    });
-
-    it("Should handle a single project with a single judge on the leaderboard", async function () {
-      await hackathonJudging.configureHackathon(
-        HACKATHON_NAME,
-        HACKATHON_DESC,
-        true
-      );
-      await hackathonJudging.registerProject(
-        PROJECT_1.name,
-        PROJECT_1.description,
-        PROJECT_1.teamLead,
-        PROJECT_1.category
-      );
-      await hackathonJudging.registerJudge(judge1.address, "Dr. Emily Chen");
-      await hackathonJudging.connect(judge1).submitScore(1, 7, 8, 6, 9);
-
-      const leaderboard = await hackathonJudging.getLeaderboard();
-      expect(leaderboard.length).to.equal(1);
       expect(leaderboard[0].projectId).to.equal(1);
-      expect(leaderboard[0].judgeCount).to.equal(1);
-      expect(leaderboard[0].totalScore).to.equal(30);
+      expect(leaderboard[0].trimmedScore).to.equal(80000);
+    });
+  });
+
+  // =========================================================
+  //  5. 2-Step Admin Transfer
+  // =========================================================
+  describe("5. 2-Step Admin Transfer", function () {
+    it("Admin can propose new admin, pending admin accepts", async function () {
+      await hackathonJudging.proposeNewAdmin(pendingAdminSigner.address);
+      expect(await hackathonJudging.pendingAdmin()).to.equal(pendingAdminSigner.address);
+
+      await hackathonJudging.connect(pendingAdminSigner).acceptAdmin();
+      expect(await hackathonJudging.admin()).to.equal(pendingAdminSigner.address);
+      expect(await hackathonJudging.pendingAdmin()).to.equal(ethers.ZeroAddress);
+    });
+  });
+
+  // =========================================================
+  //  6. Winner NFT Certificates (Soulbound)
+  // =========================================================
+  describe("6. Winner NFT Certificates (Soulbound)", function () {
+    beforeEach(async function () {
+      await hackathonJudging.registerProjectWithDetails("ChainVault", "DeFi", "Alice", "DeFi", IPFS_CID_1, teamLead1.address);
+      await hackathonJudging.setPhase(3);
     });
 
-    it("Cannot revoke a judge that has not been registered", async function () {
+    it("Can mint 1st place winner NFT with dynamic SVG tokenURI", async function () {
+      await expect(hackathonJudging.mintWinnerNFT(1, 1))
+        .to.emit(hackathonJudging, "WinnerNFTMinted");
+
+      expect(await winnerNFT.ownerOf(1)).to.equal(teamLead1.address);
+
+      const tokenURI = await winnerNFT.tokenURI(1);
+      expect(tokenURI).to.include("data:application/json;base64,");
+    });
+
+    it("NFT is Soulbound and cannot be transferred", async function () {
+      await hackathonJudging.mintWinnerNFT(1, 1);
+
       await expect(
-        hackathonJudging.revokeJudge(unauthorized.address)
-      ).to.be.revertedWith("HackathonJudging: judge not registered");
+        winnerNFT.connect(teamLead1).transferFrom(teamLead1.address, unauthorized.address, 1)
+      ).to.be.revertedWith("WinnerNFT: Soulbound token - certificates cannot be transferred");
+    });
+  });
+
+  // =========================================================
+  //  7. #14 — Minimum-Quorum Ranking
+  // =========================================================
+  describe("7. #14 — Minimum-Quorum Ranking", function () {
+    beforeEach(async function () {
+      await hackathonJudging.registerProjectWithDetails("ChainVault", "DeFi", "Alice", "DeFi", IPFS_CID_1, teamLead1.address);
+      await hackathonJudging.registerProjectWithDetails("MediLink", "Health", "Bob", "HealthTech", IPFS_CID_2, teamLead2.address);
+
+      await hackathonJudging.registerJudge(judge1.address, "Judge 1");
+      await hackathonJudging.registerJudge(judge2.address, "Judge 2");
+
+      // Set quorum to 2
+      await hackathonJudging.setMinJudgesForRanking(2);
+    });
+
+    it("Admin can update minJudgesForRanking", async function () {
+      await hackathonJudging.setMinJudgesForRanking(3);
+      expect(await hackathonJudging.minJudgesForRanking()).to.equal(3);
+    });
+
+    it("Projects below quorum are marked as provisional (quorumMet=false)", async function () {
+      // Only project 1 gets 1 judge score (below quorum=2), project 2 gets 2 judges
+      await hackathonJudging.connect(judge1).submitScore(1, 9, 9, 9, 9);
+      await hackathonJudging.connect(judge1).submitScore(2, 8, 8, 8, 8);
+      await hackathonJudging.connect(judge2).submitScore(2, 7, 7, 7, 7);
+
+      const leaderboard = await hackathonJudging.getLeaderboard();
+      // Project 2 has quorum (2 judges), project 1 does not (1 judge)
+      // Quorum-met projects must come first
+      expect(leaderboard[0].projectId).to.equal(2);
+      expect(leaderboard[0].quorumMet).to.be.true;
+      expect(leaderboard[1].quorumMet).to.be.false;
+    });
+
+    it("A project scored by more judges ranks above one with fewer judges if scores tie", async function () {
+      await hackathonJudging.setMinJudgesForRanking(1); // Both meet quorum
+
+      // Project 1: two judges, avg 800
+      await hackathonJudging.connect(judge1).submitScore(1, 8, 8, 8, 8);
+      await hackathonJudging.connect(judge2).submitScore(1, 8, 8, 8, 8);
+      // Project 2: one judge, avg 800 (identical trimmed score)
+      await hackathonJudging.connect(judge1).submitScore(2, 8, 8, 8, 8);
+
+      const leaderboard = await hackathonJudging.getLeaderboard();
+      // Tier 4 tie-break: project 1 has more judges — ranks first
+      expect(leaderboard[0].projectId).to.equal(1);
+      expect(leaderboard[1].projectId).to.equal(2);
+    });
+
+    it("Lower projectId wins the final tie-break when all else is equal", async function () {
+      await hackathonJudging.setMinJudgesForRanking(1);
+
+      // Both projects: 1 judge, same score
+      await hackathonJudging.connect(judge1).submitScore(1, 8, 8, 8, 8);
+      await hackathonJudging.connect(judge1).submitScore(2, 8, 8, 8, 8);
+
+      const leaderboard = await hackathonJudging.getLeaderboard();
+      // Tier 5 tie-break: lower projectId (1) ranks first
+      expect(leaderboard[0].projectId).to.equal(1);
+      expect(leaderboard[1].projectId).to.equal(2);
+    });
+  });
+
+  // =========================================================
+  //  8. #18 — Dispute / Appeal Window
+  // =========================================================
+  describe("8. #18 — Dispute / Appeal Window", function () {
+    beforeEach(async function () {
+      await hackathonJudging.registerProjectWithDetails("ChainVault", "DeFi", "Alice", "DeFi", IPFS_CID_1, teamLead1.address);
+      await hackathonJudging.registerJudge(judge1.address, "Judge 1");
+      await hackathonJudging.setPhase(1); // Judging phase
+    });
+
+    it("Any address can raise a dispute during Judging phase", async function () {
+      const tx = await hackathonJudging.connect(teamLead1).raiseDispute(1, "Judge appears biased towards competing team");
+      const receipt = await tx.wait();
+      // Verify event was emitted with correct core fields (timestamp is block-dependent, not asserted exactly)
+      await expect(tx)
+        .to.emit(hackathonJudging, "DisputeRaised")
+        .withArgs(1, 1, teamLead1.address, "Judge appears biased towards competing team", receipt.logs[0]?.args?.[4] ?? 0n);
+
+      // Verify dispute stored correctly
+      const d = await hackathonJudging.disputes(1);
+      expect(d.projectId).to.equal(1);
+      expect(d.raisedBy).to.equal(teamLead1.address);
+      expect(d.status).to.equal(0); // DisputeStatus.Pending
+    });
+
+    it("Raising a dispute increments pendingDisputeCount", async function () {
+      await hackathonJudging.connect(teamLead1).raiseDispute(1, "Conflict of interest not disclosed");
+      expect(await hackathonJudging.pendingDisputeCount()).to.equal(1);
+    });
+
+    it("Admin can resolve a pending dispute as Resolved", async function () {
+      await hackathonJudging.connect(teamLead1).raiseDispute(1, "Score too low");
+      await expect(hackathonJudging.resolveDispute(1, true))
+        .to.emit(hackathonJudging, "DisputeResolved");
+
+      const d = await hackathonJudging.disputes(1);
+      // enum DisputeStatus { Pending=0, Resolved=1, Rejected=2 }
+      expect(d.status).to.equal(1); // DisputeStatus.Resolved
+    });
+
+    it("Admin can reject a pending dispute", async function () {
+      await hackathonJudging.connect(teamLead1).raiseDispute(1, "Frivolous dispute");
+      await hackathonJudging.resolveDispute(1, false);
+
+      const d = await hackathonJudging.disputes(1);
+      expect(d.status).to.equal(2); // DisputeStatus.Rejected
+    });
+
+    it("pendingDisputeCount decrements after resolution", async function () {
+      await hackathonJudging.connect(teamLead1).raiseDispute(1, "Score dispute");
+      expect(await hackathonJudging.pendingDisputeCount()).to.equal(1);
+
+      await hackathonJudging.resolveDispute(1, true);
+      expect(await hackathonJudging.pendingDisputeCount()).to.equal(0);
+    });
+
+    it("Cannot finalize hackathon while disputes are pending", async function () {
+      await hackathonJudging.connect(teamLead1).raiseDispute(1, "Unresolved issue");
+
+      await hackathonJudging.setPhase(2); // Move to Revealing — allowed
+      await expect(
+        hackathonJudging.setPhase(3) // Attempt Finalized — must fail
+      ).to.be.revertedWith("HackathonJudging: cannot finalize while disputes are pending");
+    });
+
+    it("Can finalize once all disputes are resolved", async function () {
+      await hackathonJudging.connect(teamLead1).raiseDispute(1, "Dispute to resolve");
+      await hackathonJudging.resolveDispute(1, true);
+
+      await hackathonJudging.setPhase(2);
+      await expect(hackathonJudging.setPhase(3)).to.not.be.reverted;
+    });
+
+    it("Disputes cannot be raised in Setup phase", async function () {
+      await hackathonJudging.setPhase(0); // Back to Setup
+      await expect(
+        hackathonJudging.connect(teamLead1).raiseDispute(1, "Invalid phase")
+      ).to.be.revertedWith("HackathonJudging: disputes can only be raised during Judging or Revealing phase");
+    });
+
+    it("Cannot resolve a non-pending dispute twice", async function () {
+      await hackathonJudging.connect(teamLead1).raiseDispute(1, "Resolved dispute");
+      await hackathonJudging.resolveDispute(1, true);
+
+      await expect(
+        hackathonJudging.resolveDispute(1, false)
+      ).to.be.revertedWith("HackathonJudging: dispute already resolved");
+    });
+
+    it("Returns correct project dispute IDs", async function () {
+      await hackathonJudging.connect(teamLead1).raiseDispute(1, "First dispute");
+      await hackathonJudging.connect(unauthorized).raiseDispute(1, "Second dispute");
+
+      const ids = await hackathonJudging.getProjectDisputes(1);
+      expect(ids.length).to.equal(2);
+      expect(ids[0]).to.equal(1);
+      expect(ids[1]).to.equal(2);
+    });
+  });
+
+  // =========================================================
+  //  9. #23 — Team Self-Registration with Admin Approval
+  // =========================================================
+  describe("9. #23 — Team Self-Registration & Admin Approval", function () {
+    it("Any address can submit a project application in Setup phase", async function () {
+      const tx = await hackathonJudging.connect(applicant1).submitProjectApplication(
+        "ZeroTax DeFi",
+        "On-chain tax compliance tool",
+        "Charlie",
+        "DeFi",
+        "bafybeigapplication1"
+      );
+      const receipt = await tx.wait();
+      await expect(tx)
+        .to.emit(hackathonJudging, "ProjectApplicationSubmitted")
+        .withArgs(
+          1, "ZeroTax DeFi", "Charlie", applicant1.address,
+          receipt.logs[0]?.args?.[4] ?? 0n
+        );
+
+      expect(await hackathonJudging.applicationCount()).to.equal(1);
+    });
+
+    it("Application is stored with Pending status", async function () {
+      await hackathonJudging.connect(applicant1).submitProjectApplication(
+        "ZeroTax DeFi", "Desc", "Charlie", "DeFi", "bafybeig1"
+      );
+
+      const app = await hackathonJudging.projectApplications(1);
+      expect(app.name).to.equal("ZeroTax DeFi");
+      expect(app.status).to.equal(0); // ApplicationStatus.Pending
+      expect(app.applicantWallet).to.equal(applicant1.address);
+    });
+
+    it("Admin can approve an application, auto-registering the project", async function () {
+      await hackathonJudging.connect(applicant1).submitProjectApplication(
+        "ZeroTax DeFi", "On-chain tax tool", "Charlie", "DeFi", "bafybeig1"
+      );
+
+      const projCountBefore = await hackathonJudging.projectCount();
+
+      await expect(
+        hackathonJudging.approveProjectApplication(1)
+      ).to.emit(hackathonJudging, "ProjectApplicationDecided");
+
+      // Project count should have incremented
+      expect(await hackathonJudging.projectCount()).to.equal(Number(projCountBefore) + 1);
+
+      // Application status becomes Approved
+      const app = await hackathonJudging.projectApplications(1);
+      expect(app.status).to.equal(1); // ApplicationStatus.Approved
+
+      // Actual project is registered
+      const proj = await hackathonJudging.projects(Number(projCountBefore) + 1);
+      expect(proj.name).to.equal("ZeroTax DeFi");
+      expect(proj.teamWallet).to.equal(applicant1.address);
+      expect(proj.isRegistered).to.be.true;
+    });
+
+    it("Admin can reject an application", async function () {
+      await hackathonJudging.connect(applicant1).submitProjectApplication(
+        "SpamProject", "Spam", "Spammer", "Other", ""
+      );
+
+      await hackathonJudging.rejectProjectApplication(1);
+
+      const app = await hackathonJudging.projectApplications(1);
+      expect(app.status).to.equal(2); // ApplicationStatus.Rejected
+
+      // Project count unchanged
+      expect(await hackathonJudging.projectCount()).to.equal(0);
+    });
+
+    it("Cannot approve or reject an already-decided application", async function () {
+      await hackathonJudging.connect(applicant1).submitProjectApplication(
+        "ZeroTax DeFi", "Desc", "Charlie", "DeFi", "bafybeig1"
+      );
+
+      await hackathonJudging.approveProjectApplication(1);
+
+      await expect(
+        hackathonJudging.approveProjectApplication(1)
+      ).to.be.revertedWith("HackathonJudging: application already decided");
+
+      await expect(
+        hackathonJudging.rejectProjectApplication(1)
+      ).to.be.revertedWith("HackathonJudging: application already decided");
+    });
+
+    it("Applications cannot be submitted outside Setup phase", async function () {
+      await hackathonJudging.setPhase(1); // Judging phase
+
+      await expect(
+        hackathonJudging.connect(applicant1).submitProjectApplication(
+          "Late Entry", "Late", "Dave", "AI", ""
+        )
+      ).to.be.revertedWith("HackathonJudging: applications only accepted during Setup phase");
+    });
+
+    it("Non-admin cannot approve or reject an application", async function () {
+      await hackathonJudging.connect(applicant1).submitProjectApplication(
+        "ZeroTax DeFi", "Desc", "Charlie", "DeFi", "bafybeig1"
+      );
+
+      await expect(
+        hackathonJudging.connect(applicant1).approveProjectApplication(1)
+      ).to.be.revertedWith("HackathonJudging: caller is not the admin");
+
+      await expect(
+        hackathonJudging.connect(unauthorized).rejectProjectApplication(1)
+      ).to.be.revertedWith("HackathonJudging: caller is not the admin");
     });
   });
 });

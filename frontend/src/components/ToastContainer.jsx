@@ -1,45 +1,39 @@
-/**
- * Toast Notification System
- * Renders floating notification toasts from the Web3 context
- */
 import { useWeb3 } from '../hooks/useWeb3';
 import { CheckCircle2, XCircle, AlertCircle, Info, X } from 'lucide-react';
 
-const ICON_MAP = {
-  success: <CheckCircle2 size={18} color="var(--color-accent-success)" />,
-  error:   <XCircle     size={18} color="var(--color-accent-danger)"  />,
-  warning: <AlertCircle size={18} color="var(--color-accent-warning)" />,
-  info:    <Info        size={18} color="var(--color-accent-primary)"  />,
+const ICONS = {
+  success: { Icon: CheckCircle2, color: 'var(--c-green)'  },
+  error:   { Icon: XCircle,      color: 'var(--c-red)'    },
+  warning: { Icon: AlertCircle,  color: 'var(--c-amber)'  },
+  info:    { Icon: Info,         color: 'var(--c-brand)'  },
 };
 
 export default function ToastContainer() {
   const { toasts, removeToast } = useWeb3();
-
-  if (toasts.length === 0) return null;
+  if (!toasts.length) return null;
 
   return (
-    <div className="toast-container">
-      {toasts.map(toast => (
-        <div key={toast.id} className={`toast ${toast.type}`}>
-          <div className="toast-icon">{ICON_MAP[toast.type] || ICON_MAP.info}</div>
-          <div className="toast-content">
-            <div className="toast-title">{toast.title}</div>
-            {toast.message && (
-              <div className="toast-message">{toast.message}</div>
-            )}
+    <div className="toast-container" role="region" aria-label="Notifications" aria-live="polite">
+      {toasts.map((t) => {
+        const { Icon, color } = ICONS[t.type] || ICONS.info;
+        return (
+          <div key={t.id} className={`toast ${t.type}`} role="alert">
+            <Icon size={16} color={color} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
+            <div className="toast-content">
+              <div className="toast-title">{t.title}</div>
+              {t.message && <div className="toast-message">{t.message}</div>}
+            </div>
+            <button
+              onClick={() => removeToast(t.id)}
+              className="btn btn-ghost btn-icon"
+              style={{ padding: 2, color: 'var(--t-muted)' }}
+              aria-label="Dismiss notification"
+            >
+              <X size={13} />
+            </button>
           </div>
-          <button
-            onClick={() => removeToast(toast.id)}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: 'var(--color-text-muted)', padding: '2px',
-              display: 'flex', alignItems: 'center', flexShrink: 0
-            }}
-          >
-            <X size={14} />
-          </button>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

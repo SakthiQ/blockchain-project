@@ -1,224 +1,237 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
+
+interface IWinnerNFT {
+    function mintCertificate(
+        address recipient,
+        uint256 rank,
+        string calldata projectName,
+        string calldata hackathonName
+    ) external returns (uint256);
+}
 
 /**
  * @title HackathonJudging
- * @author Undergraduate Blockchain Project — Two-Student Team
- * @notice This smart contract manages a hackathon judging system where
- *         judges can submit immutable, transparent scores for registered
- *         projects. The blockchain ensures that:
- *         1. Judging records cannot be altered after submission
- *         2. Only authorized judges can submit scores
- *         3. A transparent leaderboard can be derived from on-chain data
- *         4. No central authority can manipulate results after submission
- *
- * @dev Architecture:
- *   - Admin Role: The contract deployer becomes the admin. Only admin
- *     can register judges, projects, and configure the hackathon.
- *   - Judge Role: Authorized judges can submit scores once per project.
- *   - Public: Anyone can read the leaderboard and judging records.
- *
- * Scoring Rubric (0–10 per criterion):
- *   1. Technical Quality  — How well-built is the technical solution?
- *   2. Innovation         — How original and creative is the project?
- *   3. User Experience    — How usable and polished is the interface?
- *   4. Impact             — What is the potential real-world impact?
- *
- * Aggregate Score = sum of all criteria averaged across all judges
+ * @author Undergraduate Blockchain Project — Advanced Multi-Tier Judging System
+ * @notice Smart contract for hackathon judging supporting Commit-Reveal blind scoring,
+ *         Phase state-machine deadlines, Conflict-of-Interest recusal, Weighted rubrics,
+ *         Trimmed-mean outlier detection, Append-only score versioning, 2-step admin transfer,
+ *         gas-optimized storage caching, Soulbound winner NFT certificates,
+ *         Minimum-Quorum Ranking (#14), Deterministic Tie-Breaking (#15),
+ *         Appeal/Dispute Window (#18), and Team Self-Registration with Admin Approval (#23).
  */
 contract HackathonJudging {
 
     // =========================================================
-    //  CONSTANTS
+    //  ENUMS & CONSTANTS
     // =========================================================
 
-    /// @dev Maximum score for any single rubric criterion
-    uint8 public constant MAX_SCORE = 10;
+    /// @notice Phase lifecycle state machine
+    enum Phase { Setup, Judging, Revealing, Finalized }
 
-    /// @dev Number of rubric criteria (fixed for simplicity)
+    /// @notice Dispute lifecycle
+    enum DisputeStatus { Pending, Resolved, Rejected }
+
+    /// @notice Project application lifecycle
+    enum ApplicationStatus { Pending, Approved, Rejected }
+
+    uint8 public constant MAX_SCORE = 10;
     uint8 public constant CRITERIA_COUNT = 4;
 
     // =========================================================
     //  STATE VARIABLES
     // =========================================================
 
-    /// @notice The administrator of this hackathon contract
     address public admin;
+    address public pendingAdmin;
 
-    /// @notice Basic information about the hackathon
     string public hackathonName;
     string public hackathonDescription;
-    bool public hackathonActive;
+    bool public hackathonActive; // Legacy compatibility
 
-    /// @notice Total number of registered projects
+    Phase public currentPhase;
+    uint256 public judgingDeadline;
+    uint256 public revealDeadline;
+
+    uint8[4] public criteriaWeights; // Default: [25, 25, 25, 25] (sums to 100)
+
     uint256 public projectCount;
-
-    /// @notice Total number of registered judges
     uint256 public judgeCount;
+
+    address public winnerNFTContract;
+
+    /// @notice #14 — Minimum judges required for a project to enter the ranked (non-provisional) bracket
+    uint256 public minJudgesForRanking;
+
+    /// @notice #18 — Dispute counters
+    uint256 public disputeCount;
+    uint256 public pendingDisputeCount;
+
+    /// @notice #23 — Application counter
+    uint256 public applicationCount;
 
     // =========================================================
     //  DATA STRUCTURES
     // =========================================================
 
-    /**
-     * @notice Represents a team/project participating in the hackathon
-     * @dev projectId is a 1-based index (0 means "not found")
-     */
     struct Project {
-        uint256 id;           // Unique project ID (1-based)
-        string name;          // Project name
-        string description;   // Short description
-        string teamLead;      // Team lead name
-        string category;      // Project category (e.g., "DeFi", "AI", "Healthcare")
-        bool isRegistered;    // Registration status guard
+        uint256 id;
+        string name;
+        string description;
+        string teamLead;
+        string category;
+        string ipfsCID;
+        address teamWallet;
+        bool isRegistered;
+        uint256 totalRawScore;
+        uint256 judgeCount;
+        uint256 minScore;
+        uint256 maxScore;
+        /// @notice #15 — earliest timestamp any judge first submitted a score for this project
+        uint256 firstScoreTimestamp;
     }
 
-    /**
-     * @notice Represents a judge authorized to evaluate projects
-     */
     struct Judge {
-        address wallet;       // Judge's wallet address (used for authentication)
-        string name;          // Judge's display name
-        bool isAuthorized;    // Whether the judge can currently submit scores
-        bool isRegistered;    // Whether the judge has been registered (cannot re-register)
+        address wallet;
+        string name;
+        bool isAuthorized;
+        bool isRegistered;
     }
 
-    /**
-     * @notice Represents a single rubric-based score submission by a judge for a project
-     * @dev All scoring data is stored immutably; scores cannot be updated after submission
-     */
     struct ScoreSubmission {
-        uint256 projectId;             // Which project is being scored
-        address judgeAddress;          // Which judge submitted this score
-        uint8 technicalQuality;        // Criterion 1: 0–10
-        uint8 innovation;              // Criterion 2: 0–10
-        uint8 userExperience;          // Criterion 3: 0–10
-        uint8 impact;                  // Criterion 4: 0–10
-        uint256 totalScore;            // Sum of all four criteria (0–40)
-        uint256 timestamp;             // Block timestamp at submission
-        bool exists;                   // Guard flag (false = no submission)
+        uint256 projectId;
+        address judgeAddress;
+        uint8 technicalQuality;
+        uint8 innovation;
+        uint8 userExperience;
+        uint8 impact;
+        uint256 totalScore; // Weighted score (0–1000)
+        uint256 timestamp;
+        bool exists;
+        uint256 version;
     }
 
-    /**
-     * @notice Leaderboard entry returned from getLeaderboard()
-     */
     struct LeaderboardEntry {
         uint256 projectId;
         string projectName;
         string teamLead;
         string category;
-        uint256 averageScore;   // Average total score * 100 to preserve 2 decimal places
-        uint256 judgeCount;     // Number of judges who scored this project
-        uint256 totalScore;     // Raw sum of all judge totalScores
+        string ipfsCID;
+        uint256 averageScore;   // Average * 100
+        uint256 trimmedScore;   // Trimmed Mean * 100 (drops highest & lowest if >=3 judges)
+        uint256 judgeCount;
+        uint256 totalScore;
+        bool quorumMet;         // #14 — true when judgeCount >= minJudgesForRanking
+    }
+
+    /// @notice #18 — On-chain appeal/dispute raised by any project team or participant
+    struct Dispute {
+        uint256 disputeId;
+        uint256 projectId;
+        address raisedBy;
+        string reason;
+        DisputeStatus status;
+        uint256 timestamp;
+    }
+
+    /// @notice #23 — Team self-registration application awaiting admin approval
+    struct ProjectApplication {
+        uint256 applicationId;
+        string name;
+        string description;
+        string teamLead;
+        string category;
+        string ipfsCID;
+        address applicantWallet;
+        ApplicationStatus status;
+        uint256 timestamp;
     }
 
     // =========================================================
-    //  MAPPINGS
+    //  MAPPINGS & ARRAYS
     // =========================================================
 
-    /// @notice Mapping from project ID to Project struct
     mapping(uint256 => Project) public projects;
-
-    /// @notice Mapping from judge wallet address to Judge struct
     mapping(address => Judge) public judges;
+    address[] public judgeAddresses;
 
-    /// @notice judgeHasScored[judgeAddress][projectId] = true if submitted
-    /// @dev Prevents duplicate score submissions — stored immutably on-chain
+    /// @notice judgeHasScored[judgeAddress][projectId] = true if revealed/submitted
     mapping(address => mapping(uint256 => bool)) public judgeHasScored;
 
-    /// @notice scoreSubmissions[judgeAddress][projectId] = ScoreSubmission
+    /// @notice Commit-reveal hashes: scoreCommits[judge][projectId] = keccak256(...)
+    mapping(address => mapping(uint256 => bytes32)) public scoreCommits;
+    mapping(address => mapping(uint256 => bool)) public judgeHasCommitted;
+
+    /// @notice Conflict of interest mapping: judgeConflicts[judge][projectId] = true
+    mapping(address => mapping(uint256 => bool)) public judgeConflicts;
+
+    /// @notice Active score submission
     mapping(address => mapping(uint256 => ScoreSubmission)) public scoreSubmissions;
 
-    /// @notice All judge wallet addresses (for enumeration)
-    address[] public judgeAddresses;
+    /// @notice Append-only score versioning history
+    mapping(address => mapping(uint256 => ScoreSubmission[])) public scoreHistory;
+
+    /// @notice Cached array of scores per project for fast trimmed mean calculation
+    mapping(uint256 => uint256[]) private projectScores;
+
+    /// @notice #18 — All disputes indexed by disputeId
+    mapping(uint256 => Dispute) public disputes;
+
+    /// @notice #18 — All dispute IDs raised against a project
+    mapping(uint256 => uint256[]) public projectDisputeIds;
+
+    /// @notice #23 — All project applications indexed by applicationId
+    mapping(uint256 => ProjectApplication) public projectApplications;
 
     // =========================================================
     //  EVENTS
     // =========================================================
 
-    /**
-     * @notice Emitted when the hackathon is created or updated
-     */
-    event HackathonConfigured(
-        string name,
-        string description,
-        address indexed configuredBy,
-        uint256 timestamp
-    );
+    event HackathonConfigured(string name, string description, address indexed configuredBy, uint256 timestamp);
+    event PhaseAdvanced(Phase newPhase, uint256 timestamp);
+    event DeadlinesUpdated(uint256 judgingDeadline, uint256 revealDeadline);
+    event CriteriaWeightsUpdated(uint8[4] weights);
+    event MinJudgesForRankingUpdated(uint256 minJudges);
+    event JudgeConflictSet(address indexed judge, uint256 indexed projectId, bool hasConflict);
+    event ProjectRegistered(uint256 indexed projectId, string name, string teamLead, string category, string ipfsCID, address indexed registeredBy, uint256 timestamp);
+    event JudgeStatusChanged(address indexed judgeAddress, string judgeName, bool isAuthorized, address indexed changedBy, uint256 timestamp);
+    event ScoreCommitted(uint256 indexed projectId, address indexed judgeAddress, bytes32 scoreHash, uint256 timestamp);
+    event ScoreSubmitted(uint256 indexed projectId, address indexed judgeAddress, uint8 technicalQuality, uint8 innovation, uint8 userExperience, uint8 impact, uint256 totalScore, uint256 version, uint256 timestamp);
+    event AdminTransferProposed(address indexed currentAdmin, address indexed proposedAdmin);
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+    event WinnerNFTContractSet(address indexed nftContract);
+    event WinnerNFTMinted(uint256 indexed projectId, uint256 indexed tokenId, uint256 rank, address recipient);
 
-    /**
-     * @notice Emitted when a new project/team is registered
-     */
-    event ProjectRegistered(
-        uint256 indexed projectId,
-        string name,
-        string teamLead,
-        string category,
-        address indexed registeredBy,
-        uint256 timestamp
-    );
+    // #18 — Dispute events
+    event DisputeRaised(uint256 indexed disputeId, uint256 indexed projectId, address indexed raisedBy, string reason, uint256 timestamp);
+    event DisputeResolved(uint256 indexed disputeId, uint256 indexed projectId, DisputeStatus status, address indexed resolvedBy);
 
-    /**
-     * @notice Emitted when a judge's authorization status changes
-     */
-    event JudgeStatusChanged(
-        address indexed judgeAddress,
-        string judgeName,
-        bool isAuthorized,
-        address indexed changedBy,
-        uint256 timestamp
-    );
-
-    /**
-     * @notice Emitted when a judge successfully submits scores for a project
-     * @dev This event provides a transparent, immutable record of every judging action.
-     *      Anyone can verify the authenticity of results by querying past events.
-     */
-    event ScoreSubmitted(
-        uint256 indexed projectId,
-        address indexed judgeAddress,
-        uint8 technicalQuality,
-        uint8 innovation,
-        uint8 userExperience,
-        uint8 impact,
-        uint256 totalScore,
-        uint256 timestamp
-    );
+    // #23 — Application events
+    event ProjectApplicationSubmitted(uint256 indexed applicationId, string name, string teamLead, address indexed applicantWallet, uint256 timestamp);
+    event ProjectApplicationDecided(uint256 indexed applicationId, ApplicationStatus status, address indexed decidedBy, uint256 registeredProjectId);
 
     // =========================================================
     //  MODIFIERS
     // =========================================================
 
-    /**
-     * @dev Restricts function access to the contract admin only.
-     *      This implements basic Role-Based Access Control (RBAC).
-     */
     modifier onlyAdmin() {
         require(msg.sender == admin, "HackathonJudging: caller is not the admin");
         _;
     }
 
-    /**
-     * @dev Restricts function access to currently authorized judges only.
-     *      This ensures only verified judges can submit scores.
-     */
     modifier onlyAuthorizedJudge() {
-        require(
-            judges[msg.sender].isRegistered,
-            "HackathonJudging: caller is not a registered judge"
-        );
-        require(
-            judges[msg.sender].isAuthorized,
-            "HackathonJudging: caller's judge authorization has been revoked"
-        );
+        require(judges[msg.sender].isRegistered, "HackathonJudging: caller is not a registered judge");
+        require(judges[msg.sender].isAuthorized, "HackathonJudging: caller authorization revoked");
         _;
     }
 
-    /**
-     * @dev Ensures the hackathon is in active state before certain operations
-     */
-    modifier hackathonIsActive() {
-        require(hackathonActive, "HackathonJudging: hackathon is not active");
+    modifier inPhase(Phase _expected) {
+        require(currentPhase == _expected, "HackathonJudging: invalid phase for action");
+        _;
+    }
+
+    modifier noConflict(uint256 _projectId) {
+        require(!judgeConflicts[msg.sender][_projectId], "HackathonJudging: judge recused due to conflict of interest");
         _;
     }
 
@@ -226,28 +239,18 @@ contract HackathonJudging {
     //  CONSTRUCTOR
     // =========================================================
 
-    /**
-     * @notice Deploys the contract and sets the deployer as admin
-     * @dev The admin is the only account that can configure the hackathon,
-     *      register judges, and register projects. This role cannot be transferred
-     *      in this implementation for simplicity.
-     */
     constructor() {
         admin = msg.sender;
+        hackathonActive = true;
+        currentPhase = Phase.Setup;
+        criteriaWeights = [25, 25, 25, 25]; // Default equal weighting (100% total)
+        minJudgesForRanking = 2;             // #14 — default quorum: at least 2 judges
     }
 
     // =========================================================
-    //  ADMIN FUNCTIONS
+    //  ADMIN & GOVERNANCE FUNCTIONS
     // =========================================================
 
-    /**
-     * @notice Configures or updates the hackathon details
-     * @param _name        Display name of the hackathon
-     * @param _description Short description of the hackathon
-     * @param _active      Whether judging is currently open
-     * @dev Only the admin can call this function.
-     *      Emits a HackathonConfigured event for transparency.
-     */
     function configureHackathon(
         string calldata _name,
         string calldata _description,
@@ -264,20 +267,103 @@ contract HackathonJudging {
     }
 
     /**
-     * @notice Registers a new project/team in the hackathon
-     * @param _name        Project name
-     * @param _description Short project description
-     * @param _teamLead    Name of the team lead
-     * @param _category    Project category (e.g., "DeFi", "HealthTech")
-     * @dev Only admin can register projects.
-     *      Project IDs are auto-assigned starting from 1.
+     * @notice Advance the hackathon lifecycle phase.
+     * @dev    #18 — Transition to Finalized is blocked if any disputes remain Pending.
      */
+    function setPhase(Phase _newPhase) external onlyAdmin {
+        if (_newPhase == Phase.Finalized) {
+            require(
+                pendingDisputeCount == 0,
+                "HackathonJudging: cannot finalize while disputes are pending"
+            );
+        }
+        currentPhase = _newPhase;
+        emit PhaseAdvanced(_newPhase, block.timestamp);
+    }
+
+    function setDeadlines(uint256 _judgingDeadline, uint256 _revealDeadline) external onlyAdmin {
+        require(_revealDeadline >= _judgingDeadline, "HackathonJudging: reveal deadline must be after judging deadline");
+        judgingDeadline = _judgingDeadline;
+        revealDeadline = _revealDeadline;
+        emit DeadlinesUpdated(_judgingDeadline, _revealDeadline);
+    }
+
+    function setCriteriaWeights(uint8[4] calldata _weights) external onlyAdmin {
+        require(
+            uint256(_weights[0]) + uint256(_weights[1]) + uint256(_weights[2]) + uint256(_weights[3]) == 100,
+            "HackathonJudging: criteria weights must sum to 100"
+        );
+        criteriaWeights = _weights;
+        emit CriteriaWeightsUpdated(_weights);
+    }
+
+    /// @notice #14 — Admin sets the minimum judge count required for a project to be ranked (not provisional)
+    function setMinJudgesForRanking(uint256 _minJudges) external onlyAdmin {
+        require(_minJudges >= 1, "HackathonJudging: minJudgesForRanking must be at least 1");
+        minJudgesForRanking = _minJudges;
+        emit MinJudgesForRankingUpdated(_minJudges);
+    }
+
+    function setJudgeConflict(address _judge, uint256 _projectId, bool _hasConflict) external onlyAdmin {
+        require(projects[_projectId].isRegistered, "HackathonJudging: project does not exist");
+        require(judges[_judge].isRegistered, "HackathonJudging: judge not registered");
+        judgeConflicts[_judge][_projectId] = _hasConflict;
+        emit JudgeConflictSet(_judge, _projectId, _hasConflict);
+    }
+
+    function setWinnerNFTContract(address _nftContract) external onlyAdmin {
+        require(_nftContract != address(0), "HackathonJudging: invalid NFT address");
+        winnerNFTContract = _nftContract;
+        emit WinnerNFTContractSet(_nftContract);
+    }
+
+    // 2-Step Admin Transfer
+    function proposeNewAdmin(address _newAdmin) external onlyAdmin {
+        require(_newAdmin != address(0), "HackathonJudging: invalid admin address");
+        require(_newAdmin != admin, "HackathonJudging: already admin");
+        pendingAdmin = _newAdmin;
+        emit AdminTransferProposed(admin, _newAdmin);
+    }
+
+    function acceptAdmin() external {
+        require(msg.sender == pendingAdmin, "HackathonJudging: caller is not pending admin");
+        emit AdminTransferred(admin, pendingAdmin);
+        admin = pendingAdmin;
+        pendingAdmin = address(0);
+    }
+
+    // =========================================================
+    //  PROJECT & JUDGE REGISTRATION
+    // =========================================================
+
     function registerProject(
         string calldata _name,
         string calldata _description,
         string calldata _teamLead,
         string calldata _category
     ) external onlyAdmin {
+        _registerProjectInternal(_name, _description, _teamLead, _category, "", msg.sender);
+    }
+
+    function registerProjectWithDetails(
+        string calldata _name,
+        string calldata _description,
+        string calldata _teamLead,
+        string calldata _category,
+        string calldata _ipfsCID,
+        address _teamWallet
+    ) external onlyAdmin {
+        _registerProjectInternal(_name, _description, _teamLead, _category, _ipfsCID, _teamWallet);
+    }
+
+    function _registerProjectInternal(
+        string memory _name,
+        string memory _description,
+        string memory _teamLead,
+        string memory _category,
+        string memory _ipfsCID,
+        address _teamWallet
+    ) internal {
         require(bytes(_name).length > 0, "HackathonJudging: project name cannot be empty");
         require(bytes(_teamLead).length > 0, "HackathonJudging: team lead cannot be empty");
 
@@ -290,40 +376,24 @@ contract HackathonJudging {
             description: _description,
             teamLead: _teamLead,
             category: _category,
-            isRegistered: true
+            ipfsCID: _ipfsCID,
+            teamWallet: _teamWallet,
+            isRegistered: true,
+            totalRawScore: 0,
+            judgeCount: 0,
+            minScore: type(uint256).max,
+            maxScore: 0,
+            firstScoreTimestamp: 0 // #15 — filled on first score submission
         });
 
-        emit ProjectRegistered(
-            newProjectId,
-            _name,
-            _teamLead,
-            _category,
-            msg.sender,
-            block.timestamp
-        );
+        emit ProjectRegistered(newProjectId, _name, _teamLead, _category, _ipfsCID, msg.sender, block.timestamp);
     }
 
-    /**
-     * @notice Registers a judge and authorizes them to submit scores
-     * @param _judgeAddress  Wallet address of the judge
-     * @param _name          Display name of the judge
-     * @dev A judge can only be registered once per address.
-     *      After registration, they are immediately authorized.
-     */
-    function registerJudge(
-        address _judgeAddress,
-        string calldata _name
-    ) external onlyAdmin {
+    function registerJudge(address _judgeAddress, string calldata _name) external onlyAdmin {
         require(_judgeAddress != address(0), "HackathonJudging: invalid judge address");
         require(bytes(_name).length > 0, "HackathonJudging: judge name cannot be empty");
-        require(
-            !judges[_judgeAddress].isRegistered,
-            "HackathonJudging: judge already registered"
-        );
-        require(
-            _judgeAddress != admin,
-            "HackathonJudging: admin cannot be registered as a judge"
-        );
+        require(!judges[_judgeAddress].isRegistered, "HackathonJudging: judge already registered");
+        require(_judgeAddress != admin, "HackathonJudging: admin cannot be registered as a judge");
 
         judges[_judgeAddress] = Judge({
             wallet: _judgeAddress,
@@ -338,82 +408,71 @@ contract HackathonJudging {
         emit JudgeStatusChanged(_judgeAddress, _name, true, msg.sender, block.timestamp);
     }
 
-    /**
-     * @notice Revokes a judge's authorization (they can no longer submit new scores)
-     * @param _judgeAddress  Wallet address of the judge to revoke
-     * @dev Previously submitted scores are NOT affected — immutability preserved.
-     *      This only prevents future submissions.
-     */
     function revokeJudge(address _judgeAddress) external onlyAdmin {
-        require(
-            judges[_judgeAddress].isRegistered,
-            "HackathonJudging: judge not registered"
-        );
-        require(
-            judges[_judgeAddress].isAuthorized,
-            "HackathonJudging: judge already revoked"
-        );
+        require(judges[_judgeAddress].isRegistered, "HackathonJudging: judge not registered");
+        require(judges[_judgeAddress].isAuthorized, "HackathonJudging: judge already revoked");
 
         judges[_judgeAddress].isAuthorized = false;
-
-        emit JudgeStatusChanged(
-            _judgeAddress,
-            judges[_judgeAddress].name,
-            false,
-            msg.sender,
-            block.timestamp
-        );
+        emit JudgeStatusChanged(_judgeAddress, judges[_judgeAddress].name, false, msg.sender, block.timestamp);
     }
 
-    /**
-     * @notice Re-authorizes a previously revoked judge
-     * @param _judgeAddress  Wallet address of the judge to re-authorize
-     */
     function reauthorizeJudge(address _judgeAddress) external onlyAdmin {
-        require(
-            judges[_judgeAddress].isRegistered,
-            "HackathonJudging: judge not registered"
-        );
-        require(
-            !judges[_judgeAddress].isAuthorized,
-            "HackathonJudging: judge already authorized"
-        );
+        require(judges[_judgeAddress].isRegistered, "HackathonJudging: judge not registered");
+        require(!judges[_judgeAddress].isAuthorized, "HackathonJudging: judge already authorized");
 
         judges[_judgeAddress].isAuthorized = true;
-
-        emit JudgeStatusChanged(
-            _judgeAddress,
-            judges[_judgeAddress].name,
-            true,
-            msg.sender,
-            block.timestamp
-        );
+        emit JudgeStatusChanged(_judgeAddress, judges[_judgeAddress].name, true, msg.sender, block.timestamp);
     }
 
     // =========================================================
-    //  JUDGE FUNCTIONS
+    //  JUDGING: COMMIT & REVEAL
     // =========================================================
 
     /**
-     * @notice Submits a rubric score for a project
-     * @param _projectId          ID of the project being scored (1-based)
-     * @param _technicalQuality   Score 0–10 for Technical Quality
-     * @param _innovation         Score 0–10 for Innovation
-     * @param _userExperience     Score 0–10 for User Experience
-     * @param _impact             Score 0–10 for Impact
-     *
-     * @dev SECURITY: All validation is enforced ON-CHAIN.
-     *      The frontend cannot bypass these checks because:
-     *      1. Only the Ethereum transaction signer can call this
-     *      2. Smart contract validation runs deterministically on all full nodes
-     *      3. Invalid transactions are rejected and no state is written
-     *
-     *      IMMUTABILITY: Once a score is submitted, it is permanently recorded.
-     *      There is no update or delete function — by design.
-     *
-     *      DUPLICATE PREVENTION: judgeHasScored mapping prevents a judge
-     *      from scoring the same project twice, even if they try from a
-     *      different frontend or directly via the blockchain.
+     * @notice Phase 1 of Blind Scoring: Judge submits keccak256(projectId, scores..., salt)
+     */
+    function commitScore(uint256 _projectId, bytes32 _scoreHash) external onlyAuthorizedJudge noConflict(_projectId) {
+        require(
+            currentPhase == Phase.Judging || (judgingDeadline > 0 && block.timestamp < judgingDeadline),
+            "HackathonJudging: commit score is only allowed during Judging phase"
+        );
+        require(projects[_projectId].isRegistered, "HackathonJudging: project does not exist");
+        require(_scoreHash != bytes32(0), "HackathonJudging: empty score hash");
+
+        scoreCommits[msg.sender][_projectId] = _scoreHash;
+        judgeHasCommitted[msg.sender][_projectId] = true;
+
+        emit ScoreCommitted(_projectId, msg.sender, _scoreHash, block.timestamp);
+    }
+
+    /**
+     * @notice Phase 2 of Blind Scoring: Judge reveals scores with salt
+     */
+    function revealScore(
+        uint256 _projectId,
+        uint8 _technicalQuality,
+        uint8 _innovation,
+        uint8 _userExperience,
+        uint8 _impact,
+        bytes32 _salt
+    ) external onlyAuthorizedJudge noConflict(_projectId) {
+        require(
+            currentPhase == Phase.Revealing || (revealDeadline > 0 && block.timestamp >= judgingDeadline && block.timestamp < revealDeadline),
+            "HackathonJudging: reveal score is only allowed during Revealing phase"
+        );
+        require(projects[_projectId].isRegistered, "HackathonJudging: project does not exist");
+        require(judgeHasCommitted[msg.sender][_projectId], "HackathonJudging: no commit hash found for judge");
+
+        bytes32 expectedHash = keccak256(
+            abi.encodePacked(_projectId, _technicalQuality, _innovation, _userExperience, _impact, _salt)
+        );
+        require(scoreCommits[msg.sender][_projectId] == expectedHash, "HackathonJudging: commit hash mismatch or invalid salt");
+
+        _recordScoreSubmission(_projectId, _technicalQuality, _innovation, _userExperience, _impact);
+    }
+
+    /**
+     * @notice Legacy / Direct score submission (allowed in Judging phase if commit-reveal skipped or in Setup/Judging fallback)
      */
     function submitScore(
         uint256 _projectId,
@@ -421,38 +480,44 @@ contract HackathonJudging {
         uint8 _innovation,
         uint8 _userExperience,
         uint8 _impact
-    ) external onlyAuthorizedJudge hackathonIsActive {
-        // --- VALIDATION ---
-        // 1. Check project exists
+    ) external onlyAuthorizedJudge noConflict(_projectId) {
         require(
-            projects[_projectId].isRegistered,
-            "HackathonJudging: project does not exist"
+            currentPhase == Phase.Judging || currentPhase == Phase.Setup,
+            "HackathonJudging: direct submission only allowed in Setup/Judging phase"
         );
+        require(projects[_projectId].isRegistered, "HackathonJudging: project does not exist");
+        require(!judgeHasScored[msg.sender][_projectId], "HackathonJudging: judge has already scored this project");
 
-        // 2. Check judge has not already scored this project
-        require(
-            !judgeHasScored[msg.sender][_projectId],
-            "HackathonJudging: judge has already scored this project"
-        );
+        _recordScoreSubmission(_projectId, _technicalQuality, _innovation, _userExperience, _impact);
+    }
 
-        // 3. Validate each score is within the allowed range (0–10)
+    function _recordScoreSubmission(
+        uint256 _projectId,
+        uint8 _technicalQuality,
+        uint8 _innovation,
+        uint8 _userExperience,
+        uint8 _impact
+    ) internal {
         require(_technicalQuality <= MAX_SCORE, "HackathonJudging: technicalQuality out of range");
         require(_innovation <= MAX_SCORE, "HackathonJudging: innovation out of range");
         require(_userExperience <= MAX_SCORE, "HackathonJudging: userExperience out of range");
         require(_impact <= MAX_SCORE, "HackathonJudging: impact out of range");
 
-        // --- RECORD ---
-        // Calculate total score (sum of all four criteria, max 40)
-        uint256 totalScore = uint256(_technicalQuality) +
-                             uint256(_innovation) +
-                             uint256(_userExperience) +
-                             uint256(_impact);
+        // Calculate weighted score (0–1000)
+        uint256 totalScore = (
+            uint256(_technicalQuality) * uint256(criteriaWeights[0]) +
+            uint256(_innovation) * uint256(criteriaWeights[1]) +
+            uint256(_userExperience) * uint256(criteriaWeights[2]) +
+            uint256(_impact) * uint256(criteriaWeights[3])
+        );
 
-        // Mark this judge as having scored this project (prevents duplicates)
+        bool isRevision = judgeHasScored[msg.sender][_projectId];
         judgeHasScored[msg.sender][_projectId] = true;
 
-        // Store the immutable score submission on-chain
-        scoreSubmissions[msg.sender][_projectId] = ScoreSubmission({
+        ScoreSubmission[] storage history = scoreHistory[msg.sender][_projectId];
+        uint256 newVersion = history.length + 1;
+
+        ScoreSubmission memory sub = ScoreSubmission({
             projectId: _projectId,
             judgeAddress: msg.sender,
             technicalQuality: _technicalQuality,
@@ -461,11 +526,40 @@ contract HackathonJudging {
             impact: _impact,
             totalScore: totalScore,
             timestamp: block.timestamp,
-            exists: true
+            exists: true,
+            version: newVersion
         });
 
-        // Emit event — this creates a permanent, searchable log on the blockchain
-        // that anyone can query to independently verify the judging records
+        scoreSubmissions[msg.sender][_projectId] = sub;
+        history.push(sub);
+
+        // Update cached statistics
+        Project storage proj = projects[_projectId];
+        if (!isRevision) {
+            proj.judgeCount++;
+            proj.totalRawScore += totalScore;
+            projectScores[_projectId].push(totalScore);
+            // #15 — record earliest first-score timestamp for tie-breaking
+            if (proj.firstScoreTimestamp == 0) {
+                proj.firstScoreTimestamp = block.timestamp;
+            }
+        } else {
+            // Overwrite in projectScores for revision
+            proj.totalRawScore = 0;
+            delete projectScores[_projectId];
+            for (uint256 i = 0; i < judgeAddresses.length; i++) {
+                address jAddr = judgeAddresses[i];
+                if (judgeHasScored[jAddr][_projectId]) {
+                    uint256 s = scoreSubmissions[jAddr][_projectId].totalScore;
+                    proj.totalRawScore += s;
+                    projectScores[_projectId].push(s);
+                }
+            }
+        }
+
+        if (totalScore < proj.minScore) proj.minScore = totalScore;
+        if (totalScore > proj.maxScore) proj.maxScore = totalScore;
+
         emit ScoreSubmitted(
             _projectId,
             msg.sender,
@@ -474,35 +568,183 @@ contract HackathonJudging {
             _userExperience,
             _impact,
             totalScore,
+            newVersion,
             block.timestamp
         );
+    }
+
+    // =========================================================
+    //  #18 — DISPUTE / APPEAL WINDOW
+    // =========================================================
+
+    /**
+     * @notice Any address may raise a dispute against a project's score during Judging or Revealing.
+     * @dev    Pending disputes block `setPhase(Finalized)` until resolved or rejected by admin.
+     */
+    function raiseDispute(uint256 _projectId, string calldata _reason) external {
+        require(projects[_projectId].isRegistered, "HackathonJudging: project does not exist");
+        require(
+            currentPhase == Phase.Judging || currentPhase == Phase.Revealing,
+            "HackathonJudging: disputes can only be raised during Judging or Revealing phase"
+        );
+        require(bytes(_reason).length > 0, "HackathonJudging: dispute reason cannot be empty");
+
+        disputeCount++;
+        uint256 newDisputeId = disputeCount;
+        pendingDisputeCount++;
+
+        disputes[newDisputeId] = Dispute({
+            disputeId: newDisputeId,
+            projectId: _projectId,
+            raisedBy: msg.sender,
+            reason: _reason,
+            status: DisputeStatus.Pending,
+            timestamp: block.timestamp
+        });
+
+        projectDisputeIds[_projectId].push(newDisputeId);
+
+        emit DisputeRaised(newDisputeId, _projectId, msg.sender, _reason, block.timestamp);
+    }
+
+    /**
+     * @notice Admin resolves a pending dispute. approve=true marks it Resolved; false marks it Rejected.
+     */
+    function resolveDispute(uint256 _disputeId, bool _approve) external onlyAdmin {
+        Dispute storage d = disputes[_disputeId];
+        require(d.disputeId != 0, "HackathonJudging: dispute does not exist");
+        require(d.status == DisputeStatus.Pending, "HackathonJudging: dispute already resolved");
+
+        d.status = _approve ? DisputeStatus.Resolved : DisputeStatus.Rejected;
+        pendingDisputeCount--;
+
+        emit DisputeResolved(_disputeId, d.projectId, d.status, msg.sender);
+    }
+
+    /**
+     * @notice Returns all dispute IDs for a given project.
+     */
+    function getProjectDisputes(uint256 _projectId) external view returns (uint256[] memory) {
+        return projectDisputeIds[_projectId];
+    }
+
+    // =========================================================
+    //  #23 — TEAM SELF-REGISTRATION WITH ADMIN APPROVAL
+    // =========================================================
+
+    /**
+     * @notice Any team can submit a project application for admin review.
+     *         The project is NOT registered until admin calls approveProjectApplication().
+     */
+    function submitProjectApplication(
+        string calldata _name,
+        string calldata _description,
+        string calldata _teamLead,
+        string calldata _category,
+        string calldata _ipfsCID
+    ) external {
+        require(
+            currentPhase == Phase.Setup,
+            "HackathonJudging: applications only accepted during Setup phase"
+        );
+        require(bytes(_name).length > 0, "HackathonJudging: project name cannot be empty");
+        require(bytes(_teamLead).length > 0, "HackathonJudging: team lead cannot be empty");
+
+        applicationCount++;
+        uint256 newAppId = applicationCount;
+
+        projectApplications[newAppId] = ProjectApplication({
+            applicationId: newAppId,
+            name: _name,
+            description: _description,
+            teamLead: _teamLead,
+            category: _category,
+            ipfsCID: _ipfsCID,
+            applicantWallet: msg.sender,
+            status: ApplicationStatus.Pending,
+            timestamp: block.timestamp
+        });
+
+        emit ProjectApplicationSubmitted(newAppId, _name, _teamLead, msg.sender, block.timestamp);
+    }
+
+    /**
+     * @notice Admin approves a pending application, automatically registering the project on-chain.
+     */
+    function approveProjectApplication(uint256 _applicationId) external onlyAdmin {
+        ProjectApplication storage app = projectApplications[_applicationId];
+        require(app.applicationId != 0, "HackathonJudging: application does not exist");
+        require(app.status == ApplicationStatus.Pending, "HackathonJudging: application already decided");
+
+        app.status = ApplicationStatus.Approved;
+
+        // Auto-register the project
+        _registerProjectInternal(
+            app.name,
+            app.description,
+            app.teamLead,
+            app.category,
+            app.ipfsCID,
+            app.applicantWallet
+        );
+
+        emit ProjectApplicationDecided(_applicationId, ApplicationStatus.Approved, msg.sender, projectCount);
+    }
+
+    /**
+     * @notice Admin rejects a pending application.
+     */
+    function rejectProjectApplication(uint256 _applicationId) external onlyAdmin {
+        ProjectApplication storage app = projectApplications[_applicationId];
+        require(app.applicationId != 0, "HackathonJudging: application does not exist");
+        require(app.status == ApplicationStatus.Pending, "HackathonJudging: application already decided");
+
+        app.status = ApplicationStatus.Rejected;
+
+        emit ProjectApplicationDecided(_applicationId, ApplicationStatus.Rejected, msg.sender, 0);
+    }
+
+    // =========================================================
+    //  SOULBOUND NFT WINNER ISSUANCE
+    // =========================================================
+
+    /**
+     * @notice Mints a Soulbound Certificate NFT for a top-3 winning project once hackathon is Finalized
+     */
+    function mintWinnerNFT(uint256 _projectId, uint256 _rank) external inPhase(Phase.Finalized) {
+        require(winnerNFTContract != address(0), "HackathonJudging: Winner NFT contract not set");
+        require(projects[_projectId].isRegistered, "HackathonJudging: project does not exist");
+        require(_rank >= 1 && _rank <= 3, "HackathonJudging: rank must be 1, 2, or 3");
+
+        address recipient = projects[_projectId].teamWallet;
+        if (recipient == address(0)) {
+            recipient = admin;
+        }
+
+        uint256 tokenId = IWinnerNFT(winnerNFTContract).mintCertificate(
+            recipient,
+            _rank,
+            projects[_projectId].name,
+            hackathonName
+        );
+
+        emit WinnerNFTMinted(_projectId, tokenId, _rank, recipient);
     }
 
     // =========================================================
     //  VIEW FUNCTIONS — READ ON-CHAIN DATA
     // =========================================================
 
-    /**
-     * @notice Returns a project's detailed score breakdown from a specific judge
-     * @param _judgeAddress  Address of the judge
-     * @param _projectId     Project ID to query
-     * @return The ScoreSubmission struct, or an empty struct if not found
-     */
-    function getScore(
-        address _judgeAddress,
-        uint256 _projectId
-    ) external view returns (ScoreSubmission memory) {
+    function getScore(address _judgeAddress, uint256 _projectId) external view returns (ScoreSubmission memory) {
         return scoreSubmissions[_judgeAddress][_projectId];
     }
 
+    function getScoreHistory(address _judgeAddress, uint256 _projectId) external view returns (ScoreSubmission[] memory) {
+        return scoreHistory[_judgeAddress][_projectId];
+    }
+
     /**
-     * @notice Returns aggregate score data for a single project
-     * @param _projectId  Project to query
-     * @return judgesWhoScored  Number of judges who scored this project
-     * @return totalRawScore    Sum of all totalScores from all judges
-     * @return averageScore     Average total score * 100 (2 decimal precision without floats)
-     * @dev Solidity does not support floating point. We multiply by 100 to get 2 decimal places.
-     *      e.g., averageScore = 3250 means an average of 32.50 out of 40
+     * @notice Returns aggregate score data for a project including Trimmed Mean
      */
     function getProjectAggregateScore(uint256 _projectId)
         public
@@ -510,52 +752,61 @@ contract HackathonJudging {
         returns (
             uint256 judgesWhoScored,
             uint256 totalRawScore,
-            uint256 averageScore
+            uint256 averageScore,
+            uint256 trimmedScore
         )
     {
-        require(
-            projects[_projectId].isRegistered,
-            "HackathonJudging: project does not exist"
-        );
+        require(projects[_projectId].isRegistered, "HackathonJudging: project does not exist");
 
+        uint256[] memory scores = projectScores[_projectId];
+        judgesWhoScored = scores.length;
         totalRawScore = 0;
-        judgesWhoScored = 0;
 
-        // Iterate over all registered judges and collect their scores for this project
-        for (uint256 i = 0; i < judgeAddresses.length; i++) {
-            address judgeAddr = judgeAddresses[i];
-            if (judgeHasScored[judgeAddr][_projectId]) {
-                totalRawScore += scoreSubmissions[judgeAddr][_projectId].totalScore;
-                judgesWhoScored++;
-            }
+        if (judgesWhoScored == 0) {
+            return (0, 0, 0, 0);
         }
 
-        // Calculate average * 100 to preserve 2 decimal places
-        // (avoid floating point — not supported in Solidity)
-        if (judgesWhoScored > 0) {
-            averageScore = (totalRawScore * 100) / judgesWhoScored;
+        uint256 minVal = type(uint256).max;
+        uint256 maxVal = 0;
+
+        for (uint256 i = 0; i < judgesWhoScored; i++) {
+            uint256 s = scores[i];
+            totalRawScore += s;
+            if (s < minVal) minVal = s;
+            if (s > maxVal) maxVal = s;
+        }
+
+        averageScore = (totalRawScore * 100) / judgesWhoScored;
+
+        // Trimmed mean: if >= 3 judges, drop highest & lowest scores
+        if (judgesWhoScored >= 3) {
+            uint256 trimmedTotal = totalRawScore - minVal - maxVal;
+            trimmedScore = (trimmedTotal * 100) / (judgesWhoScored - 2);
         } else {
-            averageScore = 0;
+            trimmedScore = averageScore;
         }
     }
 
     /**
-     * @notice Returns the full leaderboard sorted by average score (descending)
-     * @return entries  Array of LeaderboardEntry structs, sorted highest score first
-     * @dev Sorting is done in memory here since this is a view function (no gas for storage).
-     *      For very large hackathons, consider off-chain sorting. This is appropriate
-     *      for an undergraduate project with a small number of teams.
+     * @notice #14 #15 — Returns the full leaderboard with quorum-aware, deterministically tie-broken sort.
+     *
+     * Sort cascade (descending priority):
+     *   1. quorumMet (true first — quorum-met projects ranked above provisional)
+     *   2. trimmedScore (higher score first)
+     *   3. averageScore (higher average first)
+     *   4. judgeCount (more evaluations first — shows confidence)
+     *   5. projectId (lower id first — deterministic, insertion-order stable)
      */
     function getLeaderboard() external view returns (LeaderboardEntry[] memory entries) {
         entries = new LeaderboardEntry[](projectCount);
 
-        // Populate leaderboard entries for all projects
         for (uint256 i = 1; i <= projectCount; i++) {
             Project storage proj = projects[i];
             (
                 uint256 judgesWhoScored,
                 uint256 totalRawScore,
-                uint256 averageScore
+                uint256 averageScore,
+                uint256 trimmedScore
             ) = getProjectAggregateScore(i);
 
             entries[i - 1] = LeaderboardEntry({
@@ -563,18 +814,20 @@ contract HackathonJudging {
                 projectName: proj.name,
                 teamLead: proj.teamLead,
                 category: proj.category,
+                ipfsCID: proj.ipfsCID,
                 averageScore: averageScore,
+                trimmedScore: trimmedScore,
                 judgeCount: judgesWhoScored,
-                totalScore: totalRawScore
+                totalScore: totalRawScore,
+                quorumMet: judgesWhoScored >= minJudgesForRanking  // #14
             });
         }
 
-        // Bubble sort by averageScore descending
-        // Bubble sort is used here for simplicity and readability (appropriate for
-        // small N typical in undergraduate hackathons, e.g., 10–30 projects).
-        for (uint256 i = 0; i < entries.length; i++) {
-            for (uint256 j = 0; j < entries.length - 1 - i; j++) {
-                if (entries[j].averageScore < entries[j + 1].averageScore) {
+        // #15 — Deterministic 5-tier tie-breaking bubble sort
+        uint256 n = entries.length;
+        for (uint256 i = 0; i < n; i++) {
+            for (uint256 j = 0; j < n - 1 - i; j++) {
+                if (_shouldSwap(entries[j], entries[j + 1])) {
                     LeaderboardEntry memory temp = entries[j];
                     entries[j] = entries[j + 1];
                     entries[j + 1] = temp;
@@ -584,15 +837,41 @@ contract HackathonJudging {
     }
 
     /**
-     * @notice Returns all registered project IDs and names (for frontend enumeration)
-     * @return ids    Array of project IDs
-     * @return names  Array of corresponding project names
+     * @notice #15 — Returns true if entry `b` should rank above entry `a`.
+     *
+     * Cascade:
+     *   Tier 1: quorumMet (b has quorum, a does not)
+     *   Tier 2: trimmedScore (b > a)
+     *   Tier 3: averageScore (b > a, on trimmed tie)
+     *   Tier 4: judgeCount (b > a, on average tie)
+     *   Tier 5: projectId (b < a, lower id wins — deterministic)
      */
-    function getAllProjects()
-        external
-        view
-        returns (uint256[] memory ids, string[] memory names)
+    function _shouldSwap(LeaderboardEntry memory a, LeaderboardEntry memory b)
+        internal
+        pure
+        returns (bool)
     {
+        // Tier 1: quorum status — quorum-met always ranks above provisional
+        if (a.quorumMet != b.quorumMet) {
+            return b.quorumMet; // swap if b has quorum and a doesn't
+        }
+        // Tier 2: trimmed score (higher wins)
+        if (a.trimmedScore != b.trimmedScore) {
+            return b.trimmedScore > a.trimmedScore;
+        }
+        // Tier 3: average score (higher wins)
+        if (a.averageScore != b.averageScore) {
+            return b.averageScore > a.averageScore;
+        }
+        // Tier 4: judge count (more evaluations = more confidence)
+        if (a.judgeCount != b.judgeCount) {
+            return b.judgeCount > a.judgeCount;
+        }
+        // Tier 5: projectId (lower id first — deterministic)
+        return b.projectId < a.projectId;
+    }
+
+    function getAllProjects() external view returns (uint256[] memory ids, string[] memory names) {
         ids = new uint256[](projectCount);
         names = new string[](projectCount);
         for (uint256 i = 0; i < projectCount; i++) {
@@ -601,25 +880,14 @@ contract HackathonJudging {
         }
     }
 
-    /**
-     * @notice Returns all registered judge addresses
-     */
     function getAllJudgeAddresses() external view returns (address[] memory) {
         return judgeAddresses;
     }
 
-    /**
-     * @notice Checks whether a given address is an authorized judge
-     * @param _address  The wallet address to check
-     * @return True if the address belongs to an active authorized judge
-     */
     function isAuthorizedJudge(address _address) external view returns (bool) {
         return judges[_address].isRegistered && judges[_address].isAuthorized;
     }
 
-    /**
-     * @notice Returns detailed information about the hackathon configuration
-     */
     function getHackathonInfo()
         external
         view
@@ -627,6 +895,7 @@ contract HackathonJudging {
             string memory name,
             string memory description,
             bool active,
+            Phase phase,
             uint256 numProjects,
             uint256 numJudges,
             address adminAddress
@@ -636,9 +905,19 @@ contract HackathonJudging {
             hackathonName,
             hackathonDescription,
             hackathonActive,
+            currentPhase,
             projectCount,
             judgeCount,
             admin
         );
+    }
+
+    /// @notice Returns all pending project applications (for admin review dashboard)
+    function getPendingApplicationsCount() external view returns (uint256 count) {
+        for (uint256 i = 1; i <= applicationCount; i++) {
+            if (projectApplications[i].status == ApplicationStatus.Pending) {
+                count++;
+            }
+        }
     }
 }

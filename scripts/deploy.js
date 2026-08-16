@@ -1,99 +1,77 @@
-/**
- * Deployment Script — HackathonJudging Contract
- * ==============================================
- * Usage:
- *   npx hardhat run scripts/deploy.js --network localhost
- *
- * What this script does:
- *   1. Compiles the HackathonJudging contract
- *   2. Deploys it to the target network
- *   3. Exports the contract address and ABI to the frontend
- *      so the React app can connect without manual configuration
- */
-
 const { ethers } = require("hardhat");
 const path = require("path");
 const fs = require("fs");
 
 async function main() {
-  // Get the deployer account (first Hardhat account when running locally)
   const [deployer] = await ethers.getSigners();
 
   console.log("\n========================================");
-  console.log("  HackathonJudging — Deployment Script");
+  console.log("  HackathonJudging & WinnerNFT Deploy");
   console.log("========================================");
-  console.log(`\nDeployer address: ${deployer.address}`);
+  console.log(`Deployer address: ${deployer.address}`);
 
   const balance = await ethers.provider.getBalance(deployer.address);
   console.log(`Deployer balance: ${ethers.formatEther(balance)} ETH`);
 
-  // Deploy the contract
+  // 1. Deploy HackathonJudging
   console.log("\n> Deploying HackathonJudging...");
   const HackathonJudging = await ethers.getContractFactory("HackathonJudging");
-  const contract = await HackathonJudging.deploy();
-  await contract.waitForDeployment();
+  const hackathonJudging = await HackathonJudging.deploy();
+  await hackathonJudging.waitForDeployment();
+  const hackathonJudgingAddress = await hackathonJudging.getAddress();
+  console.log(`> HackathonJudging deployed at: ${hackathonJudgingAddress}`);
 
-  const contractAddress = await contract.getAddress();
-  console.log(`> Contract deployed at: ${contractAddress}`);
+  // 2. Deploy WinnerNFT
+  console.log("\n> Deploying WinnerNFT...");
+  const WinnerNFT = await ethers.getContractFactory("WinnerNFT");
+  const winnerNFT = await WinnerNFT.deploy(hackathonJudgingAddress);
+  await winnerNFT.waitForDeployment();
+  const winnerNFTAddress = await winnerNFT.getAddress();
+  console.log(`> WinnerNFT deployed at: ${winnerNFTAddress}`);
 
-  // Export contract address and ABI to frontend directory
-  const frontendContractsDir = path.join(
-    __dirname,
-    "..",
-    "frontend",
-    "src",
-    "contracts"
-  );
+  // 3. Link WinnerNFT in HackathonJudging
+  console.log("\n> Linking WinnerNFT in HackathonJudging...");
+  const tx = await hackathonJudging.setWinnerNFTContract(winnerNFTAddress);
+  await tx.wait();
+  console.log("> WinnerNFT linked successfully!");
 
-  // Create directory if it doesn't exist
+  // 4. Export artifacts & addresses to frontend
+  const frontendContractsDir = path.join(__dirname, "..", "frontend", "src", "contracts");
   if (!fs.existsSync(frontendContractsDir)) {
     fs.mkdirSync(frontendContractsDir, { recursive: true });
   }
 
-  // Write the contract address file
   const addressFile = path.join(frontendContractsDir, "contract-address.json");
   fs.writeFileSync(
     addressFile,
-    JSON.stringify({ HackathonJudging: contractAddress }, null, 2)
+    JSON.stringify(
+      {
+        HackathonJudging: hackathonJudgingAddress,
+        WinnerNFT: winnerNFTAddress,
+      },
+      null,
+      2
+    )
   );
-  console.log(`\n> Contract address exported to: ${addressFile}`);
+  console.log(`\n> Contract addresses exported to: ${addressFile}`);
 
-  // Copy the ABI from Hardhat artifacts to the frontend
-  const artifactPath = path.join(
-    __dirname,
-    "..",
-    "artifacts",
-    "contracts",
-    "HackathonJudging.sol",
-    "HackathonJudging.json"
-  );
+  // Export HackathonJudging ABI
+  const judgingArtifact = path.join(__dirname, "..", "artifacts", "contracts", "HackathonJudging.sol", "HackathonJudging.json");
+  if (fs.existsSync(judgingArtifact)) {
+    const artifact = JSON.parse(fs.readFileSync(judgingArtifact, "utf8"));
+    fs.writeFileSync(path.join(frontendContractsDir, "HackathonJudging.json"), JSON.stringify({ abi: artifact.abi }, null, 2));
+  }
 
-  const abiDestPath = path.join(frontendContractsDir, "HackathonJudging.json");
-
-  if (fs.existsSync(artifactPath)) {
-    const artifact = JSON.parse(fs.readFileSync(artifactPath, "utf8"));
-    // Only export the ABI (not the full artifact with bytecode)
-    fs.writeFileSync(
-      abiDestPath,
-      JSON.stringify({ abi: artifact.abi }, null, 2)
-    );
-    console.log(`> Contract ABI exported to: ${abiDestPath}`);
-  } else {
-    console.warn(
-      "> WARNING: Artifact not found. Run `npx hardhat compile` first."
-    );
+  // Export WinnerNFT ABI
+  const nftArtifact = path.join(__dirname, "..", "artifacts", "contracts", "WinnerNFT.sol", "WinnerNFT.json");
+  if (fs.existsSync(nftArtifact)) {
+    const artifact = JSON.parse(fs.readFileSync(nftArtifact, "utf8"));
+    fs.writeFileSync(path.join(frontendContractsDir, "WinnerNFT.json"), JSON.stringify({ abi: artifact.abi }, null, 2));
   }
 
   console.log("\n========================================");
   console.log("  Deployment Complete!");
   console.log("========================================");
-  console.log(`\nContract Address: ${contractAddress}`);
-  console.log(
-    `\nNext step: Run the seed script to populate demo data:\n`
-  );
-  console.log(
-    `  npx hardhat run scripts/seed.js --network localhost\n`
-  );
 }
 
 main()
