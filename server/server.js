@@ -59,7 +59,12 @@ app.get('/', (req, res) => {
 });
 
 // Start Server
-app.listen(PORT, () => {
-  console.log(`🚀 ChainJudge API Server running on http://localhost:${PORT}`);
-  console.log(`⚡ Redis Cache Status: ${cacheService.getStatus()}`);
-});
+// Export Express app for Vercel serverless execution
+module.exports = app;
+
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`🚀 ChainJudge API Server running on http://localhost:${PORT}`);
+    console.log(`⚡ Redis Cache Status: ${cacheService.getStatus()}`);
+  });
+}
