@@ -4,10 +4,12 @@ const fs = require("fs");
 
 async function main() {
   const [deployer] = await ethers.getSigners();
+  const network = await ethers.provider.getNetwork();
 
   console.log("\n========================================");
   console.log("  HackathonJudging & WinnerNFT Deploy");
   console.log("========================================");
+  console.log(`Network Name:     ${network.name} (Chain ID: ${network.chainId})`);
   console.log(`Deployer address: ${deployer.address}`);
 
   const balance = await ethers.provider.getBalance(deployer.address);

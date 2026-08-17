@@ -1,5 +1,6 @@
 const Redis = require('ioredis');
 
+const REDIS_URL = process.env.REDIS_URL;
 const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
 const REDIS_PORT = process.env.REDIS_PORT || 6379;
 
@@ -10,9 +11,7 @@ let isRedisConnected = false;
 const inMemoryCache = new Map();
 
 try {
-  redisClient = new Redis({
-    host: REDIS_HOST,
-    port: Number(REDIS_PORT),
+  const redisOptions = {
     enableOfflineQueue: false,
     maxRetriesPerRequest: 1,
     retryStrategy(times) {
@@ -21,11 +20,21 @@ try {
       }
       return Math.min(times * 100, 2000);
     },
-  });
+  };
+
+  if (REDIS_URL) {
+    redisClient = new Redis(REDIS_URL, redisOptions);
+  } else {
+    redisClient = new Redis({
+      host: REDIS_HOST,
+      port: Number(REDIS_PORT),
+      ...redisOptions,
+    });
+  }
 
   redisClient.on('connect', () => {
     isRedisConnected = true;
-    console.log(`✅ Connected to Redis Cache at ${REDIS_HOST}:${REDIS_PORT}`);
+    console.log(`✅ Connected to Redis Cache`);
   });
 
   redisClient.on('error', (err) => {

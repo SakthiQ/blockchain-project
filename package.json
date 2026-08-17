@@ -8,10 +8,14 @@
     "test": "hardhat test",
     "node": "hardhat node",
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "deploy:base-sepolia": "hardhat run scripts/deploy.js --network baseSepolia",
     "seed:local": "hardhat run scripts/seed.js --network localhost",
+    "start": "node server/server.js",
     "server": "cd server && npm start",
     "dev": "cd frontend && npm run dev",
-    "build": "cd frontend && npm run build"
+    "build": "cd frontend && npm run build",
+    "vercel-build": "cd frontend && npm install && npm run build"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
