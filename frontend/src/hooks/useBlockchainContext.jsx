@@ -227,7 +227,9 @@ export function Web3Provider({ children }) {
   const connectLocalAccount = useCallback(async (accountIndex) => {
     setIsConnecting(true);
     try {
-      const localProvider = new ethers.JsonRpcProvider('http://127.0.0.1:8545');
+      // Local demo mode — only works against a running Hardhat node
+      const localRpc = import.meta.env?.VITE_LOCAL_RPC_URL || 'http://127.0.0.1:8545';
+      const localProvider = new ethers.JsonRpcProvider(localRpc);
       const targetAcc = LOCAL_ACCOUNTS[accountIndex];
       const wallet = new ethers.Wallet(targetAcc.privateKey, localProvider);
       const address = wallet.address;
@@ -402,7 +404,9 @@ export function Web3Provider({ children }) {
 
   const getReadOnlyContract = useCallback(() => {
     try {
-      const readProvider = new ethers.JsonRpcProvider('http://127.0.0.1:8545');
+      // Use env var in production, fallback to public Sepolia RPC
+      const rpcUrl = import.meta.env?.VITE_RPC_URL || 'https://rpc.sepolia.org';
+      const readProvider = new ethers.JsonRpcProvider(rpcUrl);
       return new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, readProvider);
     } catch {
       return null;
