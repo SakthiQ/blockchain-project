@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useWeb3 } from '../hooks/useWeb3';
+import { useWeb3 } from '../hooks/useBlockchainContext';
 import { Award, CheckCircle2, AlertCircle, RefreshCw, BarChart2, ShieldCheck } from 'lucide-react';
 
 export default function ScorecardView() {

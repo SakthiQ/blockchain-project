@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useWeb3 } from '../hooks/useWeb3';
+import { useWeb3 } from '../hooks/useBlockchainContext';
 import { X, UserPlus, LogIn, Shield, Wallet, Mail, Lock, User } from 'lucide-react';
 
 const ROLES = [

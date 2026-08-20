@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { useWeb3 } from '../hooks/useWeb3';
+import { useWeb3 } from '../hooks/useBlockchainContext';
 import {
   Settings, FolderKanban, RefreshCw, AlertTriangle, Clock, Sliders,
   UserPlus, CheckCircle2, XCircle, MessageSquareWarning, ShieldCheck,
-  ShieldOff, Gavel, FileCheck2, FileMinus2, UserCheck
+  ShieldOff, Gavel, FileCheck2, FileMinus2, UserCheck, ArrowRight, AlertCircle
 } from 'lucide-react';
 
 export default function AdminView() {
@@ -27,6 +27,7 @@ export default function AdminView() {
   const [addingJudge, setAddingJudge] = useState(false);
   const [resolvingDispute, setResolvingDispute] = useState(null);
   const [decidingApp, setDecidingApp] = useState(null);
+  const [confirmPhase, setConfirmPhase] = useState(null); // phase index awaiting confirm
 
   const CATEGORIES = ['DeFi', 'HealthTech', 'EdTech', 'Sustainability', 'AI', 'Web3 Tools', 'Other'];
   const PHASES = ['Setup (Phase 0)', 'Judging / Commit (Phase 1)', 'Revealing / Verify (Phase 2)', 'Finalized / Locked (Phase 3)'];
@@ -118,7 +119,13 @@ export default function AdminView() {
       addToast('success', 'Phase Updated', `Hackathon is now in ${PHASES[phaseNum]}`);
       await loadHackathonInfo();
     } catch (err) {
-      addToast('error', 'Transaction Failed', err.reason || err.message);
+      if (err.code === 4001) {
+        addToast('warning', 'Wallet Rejected', 'Phase change transaction was rejected in MetaMask.');
+      } else {
+        addToast('error', 'Transaction Failed', err.reason || err.message);
+      }
+    } finally {
+      setConfirmPhase(null);
     }
   };
 
@@ -135,7 +142,11 @@ export default function AdminView() {
       await tx.wait();
       addToast('success', 'Rubric Updated', 'Weighted criteria successfully recorded on-chain!');
     } catch (err) {
-      addToast('error', 'Transaction Failed', err.reason || err.message);
+      if (err.code === 4001) {
+        addToast('warning', 'Wallet Rejected', 'Rubric update was rejected in MetaMask.');
+      } else {
+        addToast('error', 'Transaction Failed', err.reason || err.message);
+      }
     }
   };
 
@@ -159,7 +170,11 @@ export default function AdminView() {
       await tx.wait();
       addToast('success', 'Admin Proposed', `Pending admin set to ${pendingAdminInput.slice(0, 6)}...`);
     } catch (err) {
-      addToast('error', 'Proposal Failed', err.reason || err.message);
+      if (err.code === 4001) {
+        addToast('warning', 'Wallet Rejected', 'Admin transfer proposal was rejected in MetaMask.');
+      } else {
+        addToast('error', 'Proposal Failed', err.reason || err.message);
+      }
     }
   };
 
@@ -277,22 +292,64 @@ export default function AdminView() {
         <h3 className="card-title mb-xs flex items-center gap-sm">
           <Clock size={16} color="var(--color-primary)" /> Phase Lifecycle Control Stepper
         </h3>
+        <p style={{ fontSize: '0.78rem', color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+          Click a phase button once to stage it, then confirm. Phase transitions are irreversible on-chain.
+        </p>
         {pendingDisputes.length > 0 && (
-          <p style={{ fontSize: '0.8rem', color: 'var(--color-danger)', marginBottom: 10 }}>
-            ⚠ Finalized phase is locked — {pendingDisputes.length} pending dispute(s) must be resolved first.
-          </p>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: 'var(--space-sm) var(--space-md)',
+            background: 'var(--color-danger-subtle)',
+            border: '1px solid var(--color-danger-border)',
+            borderRadius: 'var(--radius-sm)',
+            marginBottom: 10,
+            fontSize: '0.8rem', color: 'var(--color-danger)',
+          }}>
+            <AlertCircle size={14} style={{ flexShrink: 0 }} />
+            <span>
+              <strong>Finalization Blocked:</strong> {pendingDisputes.length} pending dispute{pendingDisputes.length > 1 ? 's' : ''} must be resolved before advancing to Finalized phase.
+            </span>
+          </div>
         )}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {PHASES.map((name, idx) => (
-            <button
-              key={idx}
-              className={`btn ${hackathonInfo?.phase === idx ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => handleSetPhase(idx)}
-              disabled={idx === 3 && pendingDisputes.length > 0}
-              style={{ fontSize: '0.8rem', padding: '8px 12px' }}
-            >
-              {name}
-            </button>
+            <>
+              {idx > 0 && <ArrowRight key={`arrow-${idx}`} size={14} color="var(--color-text-muted)" style={{ flexShrink: 0 }} />}
+              {confirmPhase === idx ? (
+                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--color-warning)', fontWeight: 600 }}>Confirm?</span>
+                  <button
+                    className="btn btn-danger btn-sm"
+                    onClick={() => handleSetPhase(idx)}
+                    style={{ fontSize: '0.75rem', padding: '5px 10px' }}
+                  >
+                    Yes, switch
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setConfirmPhase(null)}
+                    style={{ fontSize: '0.75rem', padding: '5px 10px' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  key={idx}
+                  className={`btn ${hackathonInfo?.phase === idx ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => {
+                    if (idx === 3 && pendingDisputes.length > 0) {
+                      addToast('error', 'Cannot Finalize', `Resolve all ${pendingDisputes.length} pending dispute(s) before finalizing.`);
+                      return;
+                    }
+                    setConfirmPhase(idx);
+                  }}
+                  style={{ fontSize: '0.8rem', padding: '8px 12px' }}
+                >
+                  {name}
+                </button>
+              )}
+            </>
           ))}
         </div>
       </div>

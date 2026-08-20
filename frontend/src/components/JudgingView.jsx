@@ -1,10 +1,59 @@
 import { useEffect, useState } from 'react';
-import { useWeb3 } from '../hooks/useWeb3';
+import { useWeb3 } from '../hooks/useBlockchainContext';
 import { ethers } from 'ethers';
 import {
   Gavel, CheckCircle2, XCircle, AlertCircle, ExternalLink,
-  Info, Loader2, RefreshCw, Shield, Download, Key, Eye, Lock, FileText, Cpu
+  Info, Loader2, RefreshCw, Shield, Download, Key, Eye, Lock, FileText, Cpu,
+  ArrowRight, Clock, Ban
 } from 'lucide-react';
+
+// Phase status banner config
+const PHASE_INFO = [
+  {
+    phase: 0,
+    label: 'Setup Phase — Judging Not Yet Open',
+    detail: 'The admin has not opened the judging window. Score submission is disabled until Phase 1.',
+    color: 'var(--color-warning)',
+    bg: 'var(--color-warning-subtle)',
+    border: 'var(--color-warning-border)',
+    icon: Clock,
+    canCommit: false,
+    canReveal: false,
+  },
+  {
+    phase: 1,
+    label: 'Phase 1: Judging Open — Commit Your Score Hash',
+    detail: 'Adjust your scores and click "Phase 1: Commit Score Hash" to lock your blind commitment on-chain.',
+    color: 'var(--color-primary)',
+    bg: 'var(--color-primary-subtle, rgba(99,102,241,0.08))',
+    border: 'var(--color-primary)',
+    icon: Lock,
+    canCommit: true,
+    canReveal: false,
+  },
+  {
+    phase: 2,
+    label: 'Phase 2: Reveal Window — Submit Your Salt & Verify',
+    detail: 'Enter the same scores and salt you committed in Phase 1, then click "Reveal & Verify" to finalise.',
+    color: 'var(--color-success)',
+    bg: 'var(--color-success-subtle)',
+    border: 'var(--color-success-border)',
+    icon: Eye,
+    canCommit: false,
+    canReveal: true,
+  },
+  {
+    phase: 3,
+    label: 'Finalized — Scoring is Locked',
+    detail: 'The hackathon has been finalized. Score submission is permanently disabled.',
+    color: 'var(--color-text-muted)',
+    bg: 'var(--color-bg-subtle)',
+    border: 'var(--border-color)',
+    icon: Ban,
+    canCommit: false,
+    canReveal: false,
+  },
+];
 
 const RUBRIC_CRITERIA = [
   {
@@ -151,6 +200,17 @@ export default function JudgingView() {
     e.preventDefault();
     if (!contract || !isJudge) return;
 
+    // Phase gate guard
+    if (currentPhase !== 1) {
+      const phaseNames = ['Setup (Phase 0)', 'Judging/Commit (Phase 1)', 'Revealing (Phase 2)', 'Finalized (Phase 3)'];
+      addToast(
+        'warning',
+        'Action Not Allowed in Current Phase',
+        `Score commitment is only available during Phase 1 (Judging). The hackathon is currently in ${phaseNames[currentPhase]}.`
+      );
+      return;
+    }
+
     if (hasConflict) {
       addToast('error', 'Recused', 'You are recused from scoring this project due to conflict of interest.');
       return;
@@ -172,9 +232,13 @@ export default function JudgingView() {
       const receipt = await tx.wait();
       setLastTx(receipt.hash);
       setHasCommitted(true);
-      addToast('success', 'Score Committed (Phase 1)', `Hash locked on-chain.`);
+      addToast('success', 'Score Committed ✓', `Hash locked on-chain. Tx: ${receipt.hash.slice(0, 10)}...`);
     } catch (err) {
-      addToast('error', 'Commit Failed', err.reason || err.message);
+      if (err.code === 4001) {
+        addToast('warning', 'Wallet Rejected', 'You rejected the transaction in MetaMask.');
+      } else {
+        addToast('error', 'Commit Failed', err.reason || err.message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -183,6 +247,27 @@ export default function JudgingView() {
   const handleRevealScore = async (e) => {
     e.preventDefault();
     if (!contract || !isJudge) return;
+
+    // Phase gate guard
+    if (currentPhase !== 2) {
+      const phaseNames = ['Setup (Phase 0)', 'Judging/Commit (Phase 1)', 'Revealing (Phase 2)', 'Finalized (Phase 3)'];
+      addToast(
+        'warning',
+        'Action Not Allowed in Current Phase',
+        `Score reveal is only available during Phase 2 (Revealing). The hackathon is currently in ${phaseNames[currentPhase]}. ${currentPhase === 1 ? 'Complete your commit first.' : ''}`
+      );
+      return;
+    }
+
+    if (!salt) {
+      addToast('error', 'Salt Required', 'Your secret salt is missing. Load your backup JSON file or check localStorage.');
+      return;
+    }
+
+    if (!hasCommitted) {
+      addToast('error', 'No Commitment Found', 'You must commit a score hash in Phase 1 before revealing in Phase 2.');
+      return;
+    }
 
     setSubmitting(true);
     setLastTx(null);
@@ -195,14 +280,18 @@ export default function JudgingView() {
         scores.impact,
         salt
       );
-      addToast('info', 'Verification Sent', 'Submitting secret salt and revealing score on-chain...');
+      addToast('info', 'Reveal Sent', 'Submitting secret salt and revealing score on-chain...');
       const receipt = await tx.wait();
       setLastTx(receipt.hash);
       setAlreadyScored(true);
-      addToast('success', 'Score Revealed (Phase 2)', `Blind score verified and recorded on-chain!`);
+      addToast('success', 'Score Revealed & Verified ✓', `On-chain blind score confirmed. Tx: ${receipt.hash.slice(0, 10)}...`);
       await checkStatus(selectedProjectId);
     } catch (err) {
-      addToast('error', 'Reveal Failed', err.reason || err.message);
+      if (err.code === 4001) {
+        addToast('warning', 'Wallet Rejected', 'You rejected the transaction in MetaMask.');
+      } else {
+        addToast('error', 'Reveal Failed', err.reason || err.message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -226,6 +315,8 @@ export default function JudgingView() {
 
   const selectedProj = projects.find(p => String(p.id) === String(selectedProjectId));
   const aiInfo = (selectedProj && AI_PROJECT_ANALYZER[selectedProj.category]) || AI_PROJECT_ANALYZER.default;
+  const phaseInfo = PHASE_INFO[currentPhase] || PHASE_INFO[0];
+  const PhaseIcon = phaseInfo.icon;
 
   return (
     <div>
@@ -244,6 +335,48 @@ export default function JudgingView() {
           <RefreshCw size={13} className={loadingProjects ? 'spin' : ''} /> Refresh
         </button>
       </div>
+
+      {/* Phase Status Banner */}
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: 10,
+        padding: 'var(--space-sm) var(--space-md)',
+        background: phaseInfo.bg,
+        border: `1px solid ${phaseInfo.border}`,
+        borderRadius: 'var(--radius-md)',
+        marginBottom: 'var(--space-lg)',
+        color: phaseInfo.color,
+      }}>
+        <PhaseIcon size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+        <div>
+          <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{phaseInfo.label}</div>
+          <div style={{ fontSize: '0.78rem', marginTop: 2, opacity: 0.85 }}>{phaseInfo.detail}</div>
+        </div>
+      </div>
+
+      {/* Transaction Receipt Link */}
+      {lastTx && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: 'var(--space-sm) var(--space-md)',
+          background: 'var(--color-success-subtle)',
+          border: '1px solid var(--color-success-border)',
+          borderRadius: 'var(--radius-md)',
+          marginBottom: 'var(--space-md)',
+          fontSize: '0.82rem', color: 'var(--color-success)',
+        }}>
+          <CheckCircle2 size={14} />
+          <span>Transaction confirmed:</span>
+          <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>{lastTx.slice(0, 18)}...{lastTx.slice(-6)}</code>
+          <a
+            href={`https://etherscan.io/tx/${lastTx}`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: 'var(--color-success)', display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: '0.75rem' }}
+          >
+            <ExternalLink size={11} /> View on Explorer
+          </a>
+        </div>
+      )}
 
       {!isJudge && (
         <div style={{

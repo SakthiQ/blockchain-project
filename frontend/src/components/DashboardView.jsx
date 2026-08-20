@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useWeb3 } from '../hooks/useWeb3';
+import { useWeb3 } from '../hooks/useBlockchainContext';
 import {
   Activity, Users, FolderKanban, Trophy, Shield,
   Lock, Eye, Zap, AlertCircle, RefreshCw,

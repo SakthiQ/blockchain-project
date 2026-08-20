@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useWeb3 } from '../hooks/useWeb3';
+import { useWeb3 } from '../hooks/useBlockchainContext';
 import {
   Trophy, RefreshCw, BarChart3, ShieldCheck, Zap,
   Award, ExternalLink, AlertTriangle, CheckCircle2, Users, Medal

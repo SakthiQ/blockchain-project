@@ -2,7 +2,7 @@
  * TxHistoryView — On-Chain Event Explorer & Audit Log (HackerRank Style)
  */
 import { useEffect, useState } from 'react';
-import { useWeb3 } from '../hooks/useWeb3';
+import { useWeb3 } from '../hooks/useBlockchainContext';
 import { History, RefreshCw, Activity, ExternalLink } from 'lucide-react';
 
 export default function TxHistoryView() {

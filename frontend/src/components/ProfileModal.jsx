@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useWeb3 } from '../hooks/useWeb3';
+import { useWeb3 } from '../hooks/useBlockchainContext';
 import { X, User, Mail, Shield, Wallet, Save, LogOut, CheckCircle2 } from 'lucide-react';
 
 export default function ProfileModal() {

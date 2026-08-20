@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { useWeb3, LOCAL_ACCOUNTS } from '../hooks/useWeb3';
+import { useWeb3, LOCAL_ACCOUNTS } from '../hooks/useBlockchainContext';
 import {
   LayoutDashboard, FolderKanban, Gavel, Trophy,
   Settings, History, Award, ChevronDown, Check,

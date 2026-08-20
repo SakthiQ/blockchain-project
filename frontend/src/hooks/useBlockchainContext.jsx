@@ -3,7 +3,7 @@ import { ethers } from 'ethers';
 import contractAddressData from '../contracts/contract-address.json';
 import contractAbiData from '../contracts/HackathonJudging.json';
 import nftAbiData from '../contracts/WinnerNFT.json';
-import { apiClient } from '../api/client';
+import { apiClient } from '../api/apiClient';
 
 const CONTRACT_ADDRESS = contractAddressData.HackathonJudging;
 const NFT_CONTRACT_ADDRESS = contractAddressData.WinnerNFT;
@@ -90,12 +90,13 @@ export function Web3Provider({ children }) {
 
   const addToast = useCallback((type, title, message, duration = 6000) => {
     const id = ++toastIdRef.current;
-    setToasts(prev => [...prev, { id, type, title, message }]);
+    setToasts(prev => [...prev, { id, type, title, message, duration }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, duration);
     return id;
   }, []);
+
 
   const removeToast = useCallback((id) => {
     setToasts(prev => prev.filter(t => t.id !== id));

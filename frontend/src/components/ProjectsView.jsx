@@ -2,7 +2,7 @@
  * ProjectsView — Browse registered projects + team self-registration (#23) & appeals (#18)
  */
 import { useEffect, useState } from 'react';
-import { useWeb3 } from '../hooks/useWeb3';
+import { useWeb3 } from '../hooks/useBlockchainContext';
 import {
   FolderKanban, Users, RefreshCw, Gavel, Send,
   ExternalLink, MessageSquareWarning, CheckCircle2, X, Search, Filter

@@ -1,13 +1,13 @@
 import { useState } from 'react';
-import { Web3Provider } from './hooks/useWeb3';
+import { Web3Provider } from './hooks/useBlockchainContext';
 import Navbar from './components/Navbar';
 import DashboardView from './components/DashboardView';
 import ProjectsView from './components/ProjectsView';
 import JudgingView from './components/JudgingView';
-import ScorecardView from './components/ScorecardView';
+import ScorecardView from './components/JudgeScorecardMatrix';
 import LeaderboardView from './components/LeaderboardView';
 import AdminView from './components/AdminView';
-import TxHistoryView from './components/TxHistoryView';
+import TxHistoryView from './components/TransactionHistoryView';
 import ToastContainer from './components/ToastContainer';
 import AuthModal from './components/AuthModal';
 import ProfileModal from './components/ProfileModal';
