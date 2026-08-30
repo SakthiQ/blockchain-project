@@ -11,8 +11,9 @@
     "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
     "deploy:base-sepolia": "hardhat run scripts/deploy.js --network baseSepolia",
     "seed:local": "hardhat run scripts/seed.js --network localhost",
-    "start": "node server/server.js",
-    "server": "cd server && npm start",
+    "seed:users": "node db-schemas/seeds/seedUsers.js",
+    "start": "node api-server/server.js",
+    "server": "node api-server/server.js",
     "dev": "cd frontend && npm run dev",
     "build": "cd frontend && npm run build",
     "vercel-build": "cd frontend && npm install && npm run build"
@@ -22,6 +23,12 @@
     "hardhat": "^2.22.0"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^5.0.0"
+    "@openzeppelin/contracts": "^5.0.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2"
   }
 }

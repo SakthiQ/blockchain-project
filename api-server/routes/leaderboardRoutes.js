@@ -32,7 +32,7 @@ router.get('/', async (req, res) => {
 router.post('/invalidate', async (req, res) => {
   try {
     await cacheService.del(LEADERBOARD_CACHE_KEY);
-    res.json({ message: 'Leaderboard Redis cache invalidated.' });
+    res.json({ message: 'Leaderboard cache invalidated.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

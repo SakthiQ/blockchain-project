@@ -1,19 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const supabaseService = require('../services/supabaseService');
-const Dispute = require('../models/Dispute'); // Mongoose fallback
+const requireSupabase = require('../middleware/requireSupabase');
+
+router.use(requireSupabase);
 
 // ──────────────────────────────────────────────────────────────────────────────
 // GET /api/disputes — Return all disputes
 // ──────────────────────────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
-    if (supabaseService.isConfigured()) {
-      const data = await supabaseService.getDisputes();
-      return res.json(data || []);
-    }
-    const disputes = await Dispute.find().sort({ createdAt: -1 });
-    res.json(disputes);
+    const data = await supabaseService.getDisputes();
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -30,30 +28,12 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'projectId, raisedBy, and reason are required.' });
     }
 
-    let newDispute;
-
-    if (supabaseService.isConfigured()) {
-      const existing = await supabaseService.getDisputes();
-      const newDisputeId = (existing ? existing.length : 0) + 1;
-
-      newDispute = await supabaseService.createDispute({
-        disputeId: newDisputeId,
-        projectId: Number(projectId),
-        raisedBy,
-        reason,
-        status: 'Pending',
-      });
-    } else {
-      const count = await Dispute.countDocuments();
-      newDispute = new Dispute({
-        disputeId: count + 1,
-        projectId: Number(projectId),
-        raisedBy,
-        reason,
-        status: 'Pending',
-      });
-      await newDispute.save();
-    }
+    const newDispute = await supabaseService.createDispute({
+      projectId: Number(projectId),
+      raisedBy,
+      reason,
+      status: 'Pending',
+    });
 
     res.status(201).json({
       message: 'Dispute appeal filed successfully',
@@ -76,33 +56,11 @@ router.put('/:id/status', async (req, res) => {
       return res.status(400).json({ error: 'Invalid status.' });
     }
 
-    let d;
-
-    if (supabaseService.isConfigured()) {
-      const supabase = supabaseService.getClient();
-      const updates = {
-        status,
-        resolved_at: status !== 'Pending' ? new Date().toISOString() : null,
-      };
-
-      const { data, error } = await supabase
-        .from('disputes')
-        .update(updates)
-        .eq('dispute_id', Number(id))
-        .select()
-        .single();
-
-      if (error || !data) {
-        return res.status(404).json({ error: 'Dispute not found.' });
-      }
-      d = data;
-    } else {
-      d = await Dispute.findOne({ disputeId: Number(id) });
-      if (!d) return res.status(404).json({ error: 'Dispute not found.' });
-      d.status = status;
-      if (status !== 'Pending') d.resolvedAt = new Date();
-      await d.save();
-    }
+    const d = await supabaseService.updateDisputeStatus(id, {
+      status,
+      resolved_at: status !== 'Pending' ? new Date().toISOString() : null,
+    });
+    if (!d) return res.status(404).json({ error: 'Dispute not found.' });
 
     res.json({ message: `Dispute #${id} set to ${status}`, dispute: d });
   } catch (err) {
