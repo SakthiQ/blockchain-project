@@ -192,6 +192,10 @@ Open `http://localhost:5173` in your browser to interact with the full dApp!
 
 ---
 
+> **Node.js 22 or newer is required.** `@supabase/supabase-js` needs a native
+> `WebSocket`, which older majors do not provide; on Node 20 the client fails to
+> initialize and every API route returns 503 even with correct credentials.
+
 ### 2. Set Up the Supabase Database
 
 Supabase is the only datastore — there is no MongoDB or Redis to provision.
