@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  contracts:
+    name: Contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx hardhat compile
+      - run: npx hardhat test
+
+  serverless-boot:
+    name: Serverless entry point resolves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Root install only — no `npm install` inside api-server/. This is exactly
+      # how @vercel/node builds api/index.js, and it is what used to fail: the
+      # API's dependencies were declared in api-server/package.json, which Vercel
+      # never installs, so every /api route died with MODULE_NOT_FOUND.
+      - run: npm ci
+      - name: Boot api/index.js and check /api/health
+        run: node scripts/check-serverless-boot.js
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend

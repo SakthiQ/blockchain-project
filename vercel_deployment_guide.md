@@ -6,9 +6,11 @@
 |---|---|---|
 | Vercel | Wrong server path `server/server.js` | → `api/index.js` ✅ |
 | Vercel | SPA fallback `frontend/dist/index.html` | → `/index.html` ✅ |
-| Supabase | `authRoutes` was Mongoose-only | Supabase-first + fallback ✅ |
-| Supabase | `applicationRoutes` was Mongoose-only | Supabase-first + fallback ✅ |
-| Supabase | `disputeRoutes` was Mongoose-only | Supabase-first + fallback ✅ |
+| Vercel | API deps declared only in `api-server/package.json`, which `@vercel/node` never installs | → hoisted to root `package.json` ✅ |
+| Hardhat | `hardhat.config.js` never loaded `.env`, so `PRIVATE_KEY` was always undefined | → `require('dotenv').config()` ✅ |
+| Database | MongoDB and Redis removed; Supabase is the only datastore | → single backend ✅ |
+| API | Missing Supabase config silently served empty arrays | → 503 from every route ✅ |
+| API | Rate limit buckets collided across routers | → keyed by full route path ✅ |
 | Blockchain | `getReadOnlyContract` hardcoded `localhost:8545` | → `VITE_RPC_URL` env var ✅ |
 | Blockchain | `connectLocalAccount` hardcoded `localhost:8545` | → `VITE_LOCAL_RPC_URL` env var ✅ |
 | Frontend | No API proxy for local dev | → Added Vite proxy ✅ |
@@ -75,54 +77,15 @@ Sidebar → **"Table Editor"** — you should see three tables:
 ---
 
 ## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-## PART 2 — UPSTASH REDIS SETUP
+## PART 2 — VERCEL DEPLOYMENT SETUP
 ## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### Step 2.1 — Create Upstash Redis Database
-
-1. Go to **[upstash.com](https://upstash.com)** → Sign in with GitHub
-2. **"Create Database"**
-3. Set:
-   - **Name**: `chainjudge-cache`
-   - **Type**: Regional
-   - **Region**: `ap-south-1 (Mumbai)` ← closest to India
-   - **Eviction**: ✅ Enable (important for cache behavior)
-4. Click **"Create"**
-
-### Step 2.2 — Get Connection URL
-
-On your database page → **"Connect"** tab → copy **"REDIS_URL"**
-
-It will look like one of these:
-```
-redis://default:PASSWORD@your-db.upstash.io:6379        ← non-TLS
-rediss://default:PASSWORD@your-db.upstash.io:6379       ← TLS (recommended)
-```
-
-> [!IMPORTANT]
-> Use `rediss://` (double-s = TLS). Vercel serverless requires TLS connections to Redis.
-
-### ❌ Common Redis Errors
-
-| Error | Cause | Fix |
-|---|---|---|
-| `redisCache: "In-Memory Cache Fallback"` | `REDIS_URL` wrong or missing | Double-check the URL in Vercel env vars |
-| `ECONNREFUSED` | Using non-TLS on Vercel | Change `redis://` → `rediss://` |
-| `ERR max number of clients reached` | Too many connections | Upstash free tier has limits; upgrade or use connection pooling |
-| Rate limiter not working | Redis disconnected | App silently falls back to in-memory limiter (safe) |
-
----
-
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-## PART 3 — VERCEL DEPLOYMENT SETUP
-## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-### Step 3.1 — Import Project
+### Step 2.1 — Import Project
 
 1. **[vercel.com](https://vercel.com)** → **"Add New"** → **"Project"**
 2. Connect GitHub → find `blockchain-project` repo → **"Import"**
 
-### Step 3.2 — Configure Project (CRITICAL)
+### Step 2.2 — Configure Project (CRITICAL)
 
 On the configuration screen:
 
@@ -139,7 +102,7 @@ On the configuration screen:
 > BOTH the API serverless function AND the frontend build. Setting root to `frontend`
 > will make Vercel ignore `vercel.json` and break the API.
 
-### Step 3.3 — Add Environment Variables
+### Step 2.3 — Add Environment Variables
 
 Click **"Environment Variables"** and add ALL of these:
 
@@ -148,7 +111,6 @@ Click **"Environment Variables"** and add ALL of these:
 |---|---|
 | `SUPABASE_URL` | `https://XXXX.supabase.co` |
 | `SUPABASE_ANON_KEY` | `eyJ...` (anon key from Supabase) |
-| `REDIS_URL` | `rediss://default:...@...upstash.io:6379` |
 | `JWT_SECRET` | run `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `NODE_ENV` | `production` |
 | `CORS_ORIGIN` | `https://your-project.vercel.app` ← update after first deploy |
@@ -158,17 +120,26 @@ Click **"Environment Variables"** and add ALL of these:
 |---|---|
 | `VITE_API_BASE_URL` | `/api` |
 | `VITE_RPC_URL` | `https://rpc.sepolia.org` |
-| `VITE_CHAIN_ID` | `11155111` |
+
+> [!WARNING]
+> Every `VITE_` value is compiled into the public JS bundle and is readable by anyone
+> who opens the site. Never put a secret behind that prefix.
+>
+> Do **not** set `VITE_CONTRACT_ADDRESS` or `VITE_CHAIN_ID` — nothing reads them.
+> Contract addresses come from `frontend/src/contracts/contract-address.json`.
+>
+> Do **not** set `REDIS_URL` or `MONGO_URI` — both datastores were removed.
+> Supabase is the only one. If either is already set in your project, delete it.
 
 > [!TIP]
 > Set all env vars to apply to **"Production"**, **"Preview"**, and **"Development"** environments
 > (tick all three checkboxes when adding each var).
 
-### Step 3.4 — Deploy
+### Step 2.4 — Deploy
 
 Click **"Deploy"** → Wait ~3 minutes
 
-### Step 3.5 — Update CORS After Deploy
+### Step 2.5 — Update CORS After Deploy
 
 Once you have your URL (e.g. `https://chainjudge-abc123.vercel.app`):
 
@@ -190,10 +161,10 @@ Once you have your URL (e.g. `https://chainjudge-abc123.vercel.app`):
 ---
 
 ## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-## PART 4 — BLOCKCHAIN / CONTRACT SETUP
+## PART 3 — BLOCKCHAIN / CONTRACT SETUP
 ## ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### Step 4.1 — Set Up Root .env
+### Step 3.1 — Set Up Root .env
 
 Create a `.env` file in the **project root** (NOT inside `api-server/` or `frontend/`):
 
@@ -207,14 +178,14 @@ ETHERSCAN_API_KEY=""
 > Export private key from MetaMask: Account → 3-dot menu → Account Details → Show Private Key.
 > NEVER share or commit this file. `.gitignore` already excludes `.env`.
 
-### Step 4.2 — Get Sepolia Testnet ETH (Free)
+### Step 3.2 — Get Sepolia Testnet ETH (Free)
 
 You need at least **0.05 ETH** to deploy both contracts. Get it free from:
 - [sepoliafaucet.com](https://sepoliafaucet.com) — requires Alchemy account
 - [faucets.chain.link](https://faucets.chain.link/sepolia) — requires 1 LINK
 - [faucet.sepolia.dev](https://faucet.sepolia.dev) — Google/GitHub login
 
-### Step 4.3 — Install Dependencies & Deploy
+### Step 3.3 — Install Dependencies & Deploy
 
 ```bash
 # In the project root
@@ -246,7 +217,7 @@ Deployer balance: 0.12 ETH
 > Contract addresses exported to: frontend/src/contracts/contract-address.json
 ```
 
-### Step 4.4 — Commit the New Addresses
+### Step 3.4 — Commit the New Addresses
 
 The deploy script auto-updates `contract-address.json`. Now push it:
 
@@ -260,7 +231,7 @@ git push
 
 Then trigger a **Redeploy** on Vercel.
 
-### Step 4.5 — Add Contract to MetaMask Network
+### Step 3.5 — Add Contract to MetaMask Network
 
 In MetaMask → Settings → Networks → Add Network:
 - **Network Name**: Sepolia Testnet
@@ -290,17 +261,14 @@ In MetaMask → Settings → Networks → Add Network:
 □ Supabase project created
 □ SQL schema executed (3 tables visible in Table Editor)
 □ SUPABASE_URL and SUPABASE_ANON_KEY copied
-□ Upstash Redis created in Mumbai region
-□ REDIS_URL copied (starts with rediss://)
 □ Root .env created with PRIVATE_KEY
 □ npm run deploy:sepolia ran successfully
 □ contract-address.json has real Sepolia addresses (not 0x5FbDB...)
 □ git add + commit + push done
 □ Vercel project created with Root Directory = BLANK
-□ All 8 env vars added in Vercel dashboard
+□ All 6 env vars added in Vercel dashboard
 □ Vercel build succeeded
-□ /api/health returns database: "Supabase Database (Active)"
-□ /api/health returns redisCache: "Redis Cache (Active)"
+□ /api/health returns HTTP 200 and database: "Supabase Database (Active)"
 □ CORS_ORIGIN updated to actual Vercel URL + redeployed
 □ MetaMask connected to Sepolia testnet
 □ Signup/Login works in production
@@ -313,7 +281,7 @@ In MetaMask → Settings → Networks → Add Network:
 After deploy, open these in browser:
 
 ```
-https://your-project.vercel.app/api/health    ← API + DB + Redis status
+https://your-project.vercel.app/api/health    ← API + database status
 https://your-project.vercel.app/              ← Frontend React app
 ```
 
@@ -324,7 +292,10 @@ Expected `/api/health` response:
   "service": "ChainJudge API Server",
   "environment": "production",
   "database": "Supabase Database (Active)",
-  "supabase": "Supabase Database (Active)",
-  "redisCache": "Redis Cache (Active)"
+  "cache": "In-Process TTL Cache"
 }
 ```
+
+If Supabase credentials are missing or wrong, `/api/health` returns **HTTP 503**
+with `"status": "degraded"` and `"database": "Not Configured"`, and every data
+route returns 503. That is the fastest way to tell a bad env var from a bad build.

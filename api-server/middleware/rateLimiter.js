@@ -8,7 +8,11 @@ const cacheService = require('../services/cacheService');
 function rateLimiter(maxRequests = 20, windowSeconds = 60) {
   return async (req, res, next) => {
     const clientIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
-    const cacheKey = `ratelimit:${req.path}:${clientIp}`;
+    // req.path is relative to the router mount, so every router root collapses
+    // to '/' and unrelated endpoints end up sharing one budget. baseUrl restores
+    // the mount prefix ('/api/disputes' rather than '/').
+    const routeKey = `${req.baseUrl}${req.path}`;
+    const cacheKey = `ratelimit:${routeKey}:${clientIp}`;
 
     try {
       const currentHits = (await cacheService.get(cacheKey)) || 0;

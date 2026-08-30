@@ -1,11 +1,15 @@
 {
   "name": "blockchain-hackathon-judging",
   "version": "1.0.0",
-  "description": "Blockchain-Based Hackathon Judging Platform — Undergraduate Introductory Blockchain Project",
+  "description": "Blockchain-Based Hackathon Judging Platform \u2014 Undergraduate Introductory Blockchain Project",
   "private": true,
+  "engines": {
+    "node": ">=18.x"
+  },
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "check:boot": "node scripts/check-serverless-boot.js",
     "node": "hardhat node",
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
     "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
