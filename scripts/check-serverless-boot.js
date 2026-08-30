@@ -25,7 +25,9 @@ async function main() {
     const body = await res.json();
 
     if (res.status !== 200) {
-      throw new Error(`/api/health returned ${res.status}, expected 200`);
+      throw new Error(
+        `/api/health returned ${res.status}, expected 200: ${JSON.stringify(body)}`
+      );
     }
     if (body.service !== 'ChainJudge API Server') {
       throw new Error(`unexpected health payload: ${JSON.stringify(body)}`);
@@ -40,6 +42,12 @@ async function main() {
 
 main().catch((err) => {
   console.error('❌ Serverless boot check failed:', err.message);
-  console.error('   Every /api/* route would return FUNCTION_INVOCATION_FAILED on Vercel.');
+  if (err.message.includes('MODULE_NOT_FOUND') || err.code === 'MODULE_NOT_FOUND') {
+    console.error('   A dependency is missing from the ROOT package.json.');
+    console.error('   Every /api/* route would return FUNCTION_INVOCATION_FAILED on Vercel.');
+  } else {
+    console.error('   The app loaded but did not report healthy. Check the Node version');
+    console.error('   (@supabase/supabase-js requires >=22) and the Supabase env vars.');
+  }
   process.exit(1);
 });
