@@ -8,12 +8,32 @@ let isSupabaseConfigured = false;
 
 if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   try {
-    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false },
+    });
     isSupabaseConfigured = true;
     console.log('✅ Connected to Supabase Client at:', SUPABASE_URL);
   } catch (err) {
     console.warn('⚠️ Could not initialize Supabase client:', err.message);
   }
+} else {
+  console.warn('⚠️ SUPABASE_URL / SUPABASE_ANON_KEY not set — API will return 503.');
+}
+
+/**
+ * Highest existing value of `column` in `table`, or 0 when the table is empty.
+ * Used to mint the next sequential id. Counting rows is not safe here: after a
+ * delete the count collides with an id that already exists and the insert fails
+ * the UNIQUE constraint.
+ */
+async function nextId(table, column) {
+  const { data, error } = await supabase
+    .from(table)
+    .select(column)
+    .order(column, { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  return (data && data.length ? data[0][column] : 0) + 1;
 }
 
 const supabaseService = {
@@ -29,20 +49,18 @@ const supabaseService = {
     return supabase;
   },
 
-  // User Operations
+  // ── User Operations ────────────────────────────────────────────────────────
   async findUserByEmail(email) {
-    if (!this.isConfigured()) return null;
     const { data, error } = await supabase
       .from('users')
       .select('*')
       .eq('email', email.toLowerCase())
-      .single();
-    if (error || !data) return null;
+      .maybeSingle();
+    if (error) throw error;
     return data;
   },
 
   async createUser(userData) {
-    if (!this.isConfigured()) return null;
     const { data, error } = await supabase
       .from('users')
       .insert([{
@@ -59,23 +77,33 @@ const supabaseService = {
     return data;
   },
 
-  // Project Application Operations
+  async updateUserByEmail(email, updates) {
+    const { data, error } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('email', email.toLowerCase())
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  },
+
+  // ── Project Application Operations ─────────────────────────────────────────
   async getApplications() {
-    if (!this.isConfigured()) return null;
     const { data, error } = await supabase
       .from('project_applications')
       .select('*')
       .order('application_id', { ascending: true });
-    if (error) return null;
-    return data;
+    if (error) throw error;
+    return data || [];
   },
 
   async createApplication(appData) {
-    if (!this.isConfigured()) return null;
+    const applicationId = await nextId('project_applications', 'application_id');
     const { data, error } = await supabase
       .from('project_applications')
       .insert([{
-        application_id: appData.applicationId,
+        application_id: applicationId,
         name: appData.name,
         description: appData.description || '',
         team_lead: appData.teamLead,
@@ -91,23 +119,33 @@ const supabaseService = {
     return data;
   },
 
-  // Dispute Operations
+  async updateApplicationStatus(applicationId, updates) {
+    const { data, error } = await supabase
+      .from('project_applications')
+      .update(updates)
+      .eq('application_id', Number(applicationId))
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  },
+
+  // ── Dispute Operations ─────────────────────────────────────────────────────
   async getDisputes() {
-    if (!this.isConfigured()) return null;
     const { data, error } = await supabase
       .from('disputes')
       .select('*')
       .order('dispute_id', { ascending: true });
-    if (error) return null;
-    return data;
+    if (error) throw error;
+    return data || [];
   },
 
   async createDispute(disputeData) {
-    if (!this.isConfigured()) return null;
+    const disputeId = await nextId('disputes', 'dispute_id');
     const { data, error } = await supabase
       .from('disputes')
       .insert([{
-        dispute_id: disputeData.disputeId,
+        dispute_id: disputeId,
         project_id: disputeData.projectId,
         raised_by: disputeData.raisedBy,
         reason: disputeData.reason,
@@ -115,6 +153,17 @@ const supabaseService = {
       }])
       .select()
       .single();
+    if (error) throw error;
+    return data;
+  },
+
+  async updateDisputeStatus(disputeId, updates) {
+    const { data, error } = await supabase
+      .from('disputes')
+      .update(updates)
+      .eq('dispute_id', Number(disputeId))
+      .select()
+      .maybeSingle();
     if (error) throw error;
     return data;
   },

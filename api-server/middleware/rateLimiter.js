@@ -1,7 +1,7 @@
 const cacheService = require('../services/cacheService');
 
 /**
- * Redis-backed sliding window rate limiter middleware
+ * Sliding window rate limiter middleware, backed by the in-process cache.
  * @param {number} maxRequests - Max allowed requests per window
  * @param {number} windowSeconds - Time window in seconds
  */

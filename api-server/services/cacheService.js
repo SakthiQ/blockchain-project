@@ -1,117 +1,62 @@
-const Redis = require('ioredis');
+/**
+ * cacheService.js
+ * In-process TTL cache. No external cache server — Supabase is the only
+ * backing store in this project, and a short-lived cache does not need one.
+ *
+ * NOTE: on Vercel each serverless instance holds its own copy, so entries are
+ * per-instance and vanish when an instance is recycled. That is acceptable
+ * here: everything cached is either recomputable (leaderboard) or advisory
+ * (rate-limit counters).
+ */
 
-const REDIS_URL = process.env.REDIS_URL;
-const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
-const REDIS_PORT = process.env.REDIS_PORT || 6379;
+const store = new Map();
 
-let redisClient = null;
-let isRedisConnected = false;
+// Drop expired keys once the map grows, so a long-lived instance cannot leak.
+const SWEEP_THRESHOLD = 500;
 
-// Fallback in-memory LRU cache
-const inMemoryCache = new Map();
-
-try {
-  const redisOptions = {
-    enableOfflineQueue: false,
-    maxRetriesPerRequest: 1,
-    retryStrategy(times) {
-      if (times > 3) {
-        return null; // Stop retrying after 3 attempts, fallback to in-memory
-      }
-      return Math.min(times * 100, 2000);
-    },
-  };
-
-  if (REDIS_URL) {
-    redisClient = new Redis(REDIS_URL, redisOptions);
-  } else {
-    redisClient = new Redis({
-      host: REDIS_HOST,
-      port: Number(REDIS_PORT),
-      ...redisOptions,
-    });
+function sweep() {
+  const now = Date.now();
+  for (const [key, item] of store) {
+    if (item.expiry && now > item.expiry) store.delete(key);
   }
-
-  redisClient.on('connect', () => {
-    isRedisConnected = true;
-    console.log(`✅ Connected to Redis Cache`);
-  });
-
-  redisClient.on('error', (err) => {
-    isRedisConnected = false;
-  });
-} catch (e) {
-  isRedisConnected = false;
 }
 
 const cacheService = {
   isReady() {
-    return isRedisConnected && redisClient && redisClient.status === 'ready';
+    return true;
   },
 
   getStatus() {
-    return this.isReady() ? 'Redis Cache (Active)' : 'In-Memory Cache Fallback';
+    return 'In-Process TTL Cache';
   },
 
   async get(key) {
-    if (this.isReady()) {
-      try {
-        const data = await redisClient.get(key);
-        return data ? JSON.parse(data) : null;
-      } catch (err) {
-        // Fallback to in-memory
-      }
+    const item = store.get(key);
+    if (!item) return null;
+    if (item.expiry && Date.now() > item.expiry) {
+      store.delete(key);
+      return null;
     }
-    const memItem = inMemoryCache.get(key);
-    if (memItem) {
-      if (memItem.expiry && Date.now() > memItem.expiry) {
-        inMemoryCache.delete(key);
-        return null;
-      }
-      return memItem.data;
-    }
-    return null;
+    return item.data;
   },
 
   async set(key, value, ttlSeconds = 60) {
-    const stringValue = JSON.stringify(value);
-    if (this.isReady()) {
-      try {
-        await redisClient.set(key, stringValue, 'EX', ttlSeconds);
-        return true;
-      } catch (err) {
-        // Fallback to in-memory
-      }
-    }
-    inMemoryCache.set(key, {
+    if (store.size > SWEEP_THRESHOLD) sweep();
+    store.set(key, {
       data: value,
-      expiry: Date.now() + (ttlSeconds * 1000),
+      expiry: Date.now() + ttlSeconds * 1000,
     });
     return true;
   },
 
   async del(key) {
-    if (this.isReady()) {
-      try {
-        await redisClient.del(key);
-      } catch (err) {}
-    }
-    inMemoryCache.delete(key);
+    store.delete(key);
   },
 
   async flushPattern(pattern) {
-    if (this.isReady()) {
-      try {
-        const keys = await redisClient.keys(pattern);
-        if (keys.length > 0) {
-          await redisClient.del(...keys);
-        }
-      } catch (err) {}
-    }
-    for (const key of inMemoryCache.keys()) {
-      if (key.includes(pattern.replace('*', ''))) {
-        inMemoryCache.delete(key);
-      }
+    const prefix = pattern.replace('*', '');
+    for (const key of store.keys()) {
+      if (key.startsWith(prefix)) store.delete(key);
     }
   },
 };

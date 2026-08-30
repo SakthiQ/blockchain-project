@@ -1,19 +1,28 @@
 /**
  * Seed Script — Demo Users
  *
- * Creates 5 demo user accounts (Admin, 3 Judges, 1 Participant) for
- * local development and testing. Idempotent — safe to run multiple times.
+ * Creates 5 demo user accounts (Admin, 3 Judges, 1 Participant) in Supabase
+ * for local development and testing. Idempotent — safe to run repeatedly.
  *
- * Usage:
- *   node database/seeds/seedUsers.js
+ * Usage (from the project root, with SUPABASE_URL / SUPABASE_ANON_KEY set):
+ *   npm run seed:users
  */
 
-require('dotenv').config({ path: '../backend/.env' });
-const mongoose = require('mongoose');
+require('dotenv').config();
 const bcrypt = require('bcryptjs');
-const User = require('../models/User');
+const { createClient } = require('@supabase/supabase-js');
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/chainjudge';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  console.error('❌ SUPABASE_URL and SUPABASE_ANON_KEY must be set before seeding.');
+  process.exit(1);
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: false },
+});
 
 const DEMO_USERS = [
   {
@@ -59,38 +68,43 @@ const DEMO_USERS = [
 ];
 
 async function seed() {
-  await mongoose.connect(MONGO_URI);
-  console.log('✅ Connected to MongoDB:', MONGO_URI);
+  console.log('✅ Connected to Supabase:', SUPABASE_URL);
 
   let created = 0;
   let skipped = 0;
 
   for (const u of DEMO_USERS) {
-    const existing = await User.findOne({ email: u.email });
+    const { data: existing, error: lookupError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', u.email)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+
     if (existing) {
       console.log(`⏭️  Skipping (already exists): ${u.email}`);
       skipped++;
       continue;
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(u.password, salt);
+    const passwordHash = await bcrypt.hash(u.password, await bcrypt.genSalt(10));
 
-    await User.create({
+    const { error: insertError } = await supabase.from('users').insert([{
       name: u.name,
       email: u.email,
-      passwordHash,
+      password_hash: passwordHash,
       role: u.role,
-      walletAddress: u.walletAddress,
+      wallet_address: u.walletAddress,
       bio: u.bio,
-    });
+    }]);
+    if (insertError) throw insertError;
 
     console.log(`✅ Created [${u.role.padEnd(11)}]: ${u.email}`);
     created++;
   }
 
-  console.log(`\n🌱 Seeding complete. Created: ${created} | Skipped: ${skipped}`);
-  await mongoose.disconnect();
+  console.log(`
+🌱 Seeding complete. Created: ${created} | Skipped: ${skipped}`);
 }
 
 seed().catch((err) => {
