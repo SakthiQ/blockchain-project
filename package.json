@@ -4,7 +4,7 @@
   "description": "Blockchain-Based Hackathon Judging Platform \u2014 Undergraduate Introductory Blockchain Project",
   "private": true,
   "engines": {
-    "node": ">=18.x"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "compile": "hardhat compile",

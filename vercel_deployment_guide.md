@@ -155,6 +155,7 @@ Once you have your URL (e.g. `https://chainjudge-abc123.vercel.app`):
 | `404` on all `/api/*` routes | `vercel.json` not found or wrong | Ensure Root Directory is blank so Vercel reads `vercel.json` |
 | Frontend loads but API returns `CORS error` | `CORS_ORIGIN` mismatch | Set exact URL + redeploy |
 | `Function timeout` | Serverless function took >10s | Free tier limit — check for slow DB queries |
+| `/api/health` 503 with valid Supabase keys | Project set to Node 20 or older | `@supabase/supabase-js` requires Node >= 22 and fails to initialize below it. Settings -> General -> Node.js Version -> **22.x**. `engines.node` in the root `package.json` already requests this. |
 | `Module not found: api-server` | `api/index.js` path wrong | Verify `../api-server/server` path in `api/index.js` |
 | White screen on refresh | SPA fallback broken | `vercel.json` route `/(.*) → /index.html` must be present |
 
