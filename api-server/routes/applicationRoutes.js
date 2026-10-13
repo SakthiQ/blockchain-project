@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabaseService = require('../services/supabaseService');
 const requireSupabase = require('../middleware/requireSupabase');
+const { requireRole } = require('../middleware/auth');
 
 router.use(requireSupabase);
 
@@ -49,9 +50,9 @@ router.post('/', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// PUT /api/applications/:id/status — Approve or Reject application
+// PUT /api/applications/:id/status — Approve or Reject application (admin only)
 // ──────────────────────────────────────────────────────────────────────────────
-router.put('/:id/status', async (req, res) => {
+router.put('/:id/status', requireRole('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const { status, registeredProjectId } = req.body;

@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 // are involved. The routes call supabaseService.<method> at request time, which
 // is what makes replacing the methods here effective.
 const app = require("../api-server/server");
+const { JWT_SECRET } = require("../api-server/middleware/auth");
 const supabaseService = require("../api-server/services/supabaseService");
 const cacheService = require("../api-server/services/cacheService");
 
@@ -13,10 +14,14 @@ describe("API routes", function () {
   let server, base;
   const original = {};
 
-  const call = async (method, path, body) => {
+  const tokenFor = (role, opts = {}) =>
+    jwt.sign({ id: 1, role, email: `${role}@x.io` }, JWT_SECRET, { expiresIn: "1h", ...opts });
+  const asAdmin = () => ({ Authorization: `Bearer ${tokenFor("admin")}` });
+
+  const call = async (method, path, body, headers = {}) => {
     const res = await fetch(base + path, {
       method,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await res.text();
@@ -37,7 +42,9 @@ describe("API routes", function () {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  beforeEach(function () {
+  beforeEach(async function () {
+    // Each test gets a fresh rate-limit budget; the limiter is tested on its own below.
+    await cacheService.flushPattern("ratelimit:*");
     Object.assign(supabaseService, original);
     supabaseService.isConfigured = () => true;
   });
@@ -184,6 +191,76 @@ describe("API routes", function () {
     });
   });
 
+  describe("status route authorization", function () {
+    const routes = [
+      ["/api/applications/1/status", "updateApplicationStatus", { status: "Approved" }],
+      ["/api/disputes/1/status", "updateDisputeStatus", { status: "Resolved" }],
+    ];
+
+    for (const [path, method, body] of routes) {
+      describe(`PUT ${path}`, function () {
+        let called;
+        beforeEach(function () {
+          called = false;
+          supabaseService[method] = async () => { called = true; return { id: 1 }; };
+        });
+
+        it("401 without a token", async function () {
+          const r = await call("PUT", path, body);
+          expect(r.status).to.equal(401);
+          expect(called).to.equal(false);
+        });
+
+        it("401 for a malformed Authorization header", async function () {
+          const r = await call("PUT", path, body, { Authorization: tokenFor("admin") });
+          expect(r.status).to.equal(401);
+        });
+
+        it("401 for a token signed with another secret", async function () {
+          const forged = jwt.sign({ id: 1, role: "admin" }, "not-the-secret");
+          const r = await call("PUT", path, body, { Authorization: `Bearer ${forged}` });
+          expect(r.status).to.equal(401);
+          expect(called).to.equal(false);
+        });
+
+        it("401 for an expired token", async function () {
+          const expired = tokenFor("admin", { expiresIn: -10 });
+          const r = await call("PUT", path, body, { Authorization: `Bearer ${expired}` });
+          expect(r.status).to.equal(401);
+        });
+
+        it("401 for an unsigned (alg none) token", async function () {
+          const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+          const none = `${b64({ alg: "none", typ: "JWT" })}.${b64({ id: 1, role: "admin" })}.`;
+          const r = await call("PUT", path, body, { Authorization: `Bearer ${none}` });
+          expect(r.status).to.equal(401);
+          expect(called).to.equal(false);
+        });
+
+        for (const role of ["participant", "judge"]) {
+          it(`403 for a ${role}`, async function () {
+            const r = await call("PUT", path, body, { Authorization: `Bearer ${tokenFor(role)}` });
+            expect(r.status).to.equal(403);
+            expect(called).to.equal(false);
+          });
+        }
+
+        it("allows an admin", async function () {
+          const r = await call("PUT", path, body, asAdmin());
+          expect(r.status).to.equal(200);
+          expect(called).to.equal(true);
+        });
+      });
+    }
+
+    it("leaves the public routes open", async function () {
+      supabaseService.getApplications = async () => [];
+      supabaseService.createDispute = async (d) => d;
+      expect((await call("GET", "/api/applications")).status).to.equal(200);
+      expect((await call("POST", "/api/disputes", { projectId: 1, raisedBy: "0x1", reason: "r" })).status).to.equal(201);
+    });
+  });
+
   describe("applications", function () {
     it("lists applications", async function () {
       supabaseService.getApplications = async () => [{ id: 1 }];
@@ -209,20 +286,20 @@ describe("API routes", function () {
     });
 
     it("rejects an invalid status", async function () {
-      const r = await call("PUT", "/api/applications/1/status", { status: "Maybe" });
+      const r = await call("PUT", "/api/applications/1/status", { status: "Maybe" }, asAdmin());
       expect(r.status).to.equal(400);
     });
 
     it("returns 404 for an unknown application", async function () {
       supabaseService.updateApplicationStatus = async () => null;
-      const r = await call("PUT", "/api/applications/404/status", { status: "Approved" });
+      const r = await call("PUT", "/api/applications/404/status", { status: "Approved" }, asAdmin());
       expect(r.status).to.equal(404);
     });
 
     it("approves an application and records the project id", async function () {
       let args;
       supabaseService.updateApplicationStatus = async (id, u) => { args = [id, u]; return { id: 5 }; };
-      const r = await call("PUT", "/api/applications/5/status", { status: "Approved", registeredProjectId: 12 });
+      const r = await call("PUT", "/api/applications/5/status", { status: "Approved", registeredProjectId: 12 }, asAdmin());
       expect(r.status).to.equal(200);
       expect(args).to.deep.equal(["5", { status: "Approved", registered_project_id: 12 }]);
     });
@@ -250,21 +327,21 @@ describe("API routes", function () {
     });
 
     it("rejects an invalid status", async function () {
-      const r = await call("PUT", "/api/disputes/1/status", { status: "Approved" });
+      const r = await call("PUT", "/api/disputes/1/status", { status: "Approved" }, asAdmin());
       expect(r.status).to.equal(400);
     });
 
     it("returns 404 for an unknown dispute", async function () {
       supabaseService.updateDisputeStatus = async () => null;
-      const r = await call("PUT", "/api/disputes/404/status", { status: "Resolved" });
+      const r = await call("PUT", "/api/disputes/404/status", { status: "Resolved" }, asAdmin());
       expect(r.status).to.equal(404);
     });
 
     it("sets resolved_at when resolving and clears it when set back to Pending", async function () {
       const seen = [];
       supabaseService.updateDisputeStatus = async (id, u) => { seen.push(u); return { id }; };
-      await call("PUT", "/api/disputes/1/status", { status: "Resolved" });
-      await call("PUT", "/api/disputes/1/status", { status: "Pending" });
+      await call("PUT", "/api/disputes/1/status", { status: "Resolved" }, asAdmin());
+      await call("PUT", "/api/disputes/1/status", { status: "Pending" }, asAdmin());
       expect(seen[0].resolved_at).to.be.a("string");
       expect(seen[1].resolved_at).to.equal(null);
     });
@@ -302,12 +379,12 @@ describe("API routes", function () {
       const path = "/api/disputes/rate-limit-probe/status";
       const statuses = [];
       for (let i = 0; i < 11; i++) {
-        statuses.push((await call("PUT", path, { status: "Resolved" })).status);
+        statuses.push((await call("PUT", path, { status: "Resolved" }, asAdmin())).status);
       }
       expect(statuses.slice(0, 10)).to.not.include(429);
       expect(statuses[10]).to.equal(429);
 
-      const other = await call("PUT", "/api/disputes/another-probe/status", { status: "Resolved" });
+      const other = await call("PUT", "/api/disputes/another-probe/status", { status: "Resolved" }, asAdmin());
       expect(other.status).to.equal(200);
     });
   });

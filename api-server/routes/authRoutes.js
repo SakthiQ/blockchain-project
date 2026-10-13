@@ -4,16 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const supabaseService = require('../services/supabaseService');
 const requireSupabase = require('../middleware/requireSupabase');
-
-// A dev-only default keeps `npm run dev` working without a .env, but shipping
-// that literal to production would mean every session token is signed with a
-// value published in this repo.
-const JWT_SECRET = process.env.JWT_SECRET
-  || (process.env.NODE_ENV === 'production' ? null : 'chainjudge_dev_only_secret');
-
-if (!JWT_SECRET) {
-  throw new Error('JWT_SECRET must be set in production.');
-}
+const { JWT_SECRET } = require('../middleware/auth');
 
 router.use(requireSupabase);
 
