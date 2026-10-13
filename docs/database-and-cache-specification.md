@@ -337,20 +337,19 @@ Retrieve all dispute records sorted newest first.
 
 #### `POST /api/disputes`
 
-File a new dispute appeal.
+File a new dispute appeal. Requires `Authorization: Bearer <token>`. The dispute is recorded under the wallet address saved on the caller's account (`raisedBy` is set by the server; any value sent is ignored). Returns 401 without a valid token and 400 if the account has no wallet address yet.
 
 **Request Body:**
 ```json
 {
   "projectId": 2,
-  "raisedBy": "0x15d34...",
   "reason": "Judge #2 had a prior business relationship with this team."
 }
 ```
 
 #### `PUT /api/disputes/:id/status`
 
-Resolve or reject a dispute. Admin operation.
+Resolve or reject a dispute. Admin only (`Authorization: Bearer <token>`; 401 without a valid token, 403 for other roles).
 
 **Request Body:**
 ```json
