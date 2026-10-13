@@ -311,11 +311,14 @@ describe("API routes", function () {
       });
     }
 
-    it("leaves the public routes open", async function () {
+    it("leaves the read routes and application submission open", async function () {
       supabaseService.getApplications = async () => [];
-      supabaseService.createDispute = async (d) => d;
+      supabaseService.getDisputes = async () => [];
+      supabaseService.createApplication = async (d) => d;
       expect((await call("GET", "/api/applications")).status).to.equal(200);
-      expect((await call("POST", "/api/disputes", { projectId: 1, raisedBy: "0x1", reason: "r" })).status).to.equal(201);
+      expect((await call("GET", "/api/disputes")).status).to.equal(200);
+      const submit = await call("POST", "/api/applications", { name: "P", teamLead: "L", applicantWallet: "0x1" });
+      expect(submit.status).to.equal(201);
     });
   });
 
@@ -371,17 +374,57 @@ describe("API routes", function () {
       expect(r.body).to.deep.equal([{ id: 1 }]);
     });
 
-    it("rejects a dispute missing a reason", async function () {
-      const r = await call("POST", "/api/disputes", { projectId: 1, raisedBy: "0x1" });
-      expect(r.status).to.equal(400);
-    });
+    describe("filing a dispute", function () {
+      const filer = (role = "participant") => roleAuth(role);
+      beforeEach(function () {
+        supabaseService.findUserByEmail = async (email) => ({ email, wallet_address: "0xUSERWALLET" });
+        supabaseService.createDispute = async (d) => ({ id: 1, ...d });
+      });
 
-    it("files a dispute as Pending with a numeric project id", async function () {
-      let data;
-      supabaseService.createDispute = async (d) => { data = d; return { id: 1, ...d }; };
-      const r = await call("POST", "/api/disputes", { projectId: "3", raisedBy: "0x1", reason: "unfair", status: "Resolved" });
-      expect(r.status).to.equal(201);
-      expect(data).to.deep.equal({ projectId: 3, raisedBy: "0x1", reason: "unfair", status: "Pending" });
+      it("401 without a token, and writes nothing", async function () {
+        let wrote = false;
+        supabaseService.createDispute = async () => { wrote = true; return {}; };
+        const r = await call("POST", "/api/disputes", { projectId: 1, reason: "r" });
+        expect(r.status).to.equal(401);
+        expect(wrote).to.equal(false);
+      });
+
+      it("400 when projectId or reason is missing", async function () {
+        expect((await call("POST", "/api/disputes", { projectId: 1 }, filer())).status).to.equal(400);
+        expect((await call("POST", "/api/disputes", { reason: "r" }, filer())).status).to.equal(400);
+      });
+
+      it("records the signed-in user's wallet and ignores a raisedBy in the body", async function () {
+        let data;
+        supabaseService.createDispute = async (d) => { data = d; return { id: 1, ...d }; };
+        const r = await call(
+          "POST", "/api/disputes",
+          { projectId: "3", raisedBy: "0xSOMEONEELSE", reason: "unfair", status: "Resolved" },
+          filer()
+        );
+        expect(r.status).to.equal(201);
+        expect(data).to.deep.equal({ projectId: 3, raisedBy: "0xUSERWALLET", reason: "unfair", status: "Pending" });
+      });
+
+      it("looks the user up by the token's email, not a body email", async function () {
+        let looked;
+        supabaseService.findUserByEmail = async (email) => { looked = email; return { wallet_address: "0x1" }; };
+        await call("POST", "/api/disputes", { projectId: 1, reason: "r", email: "victim@x.io" }, filer());
+        expect(looked).to.equal("participant@x.io");
+      });
+
+      it("400 when the account has no wallet address yet", async function () {
+        supabaseService.findUserByEmail = async () => ({ wallet_address: "" });
+        const r = await call("POST", "/api/disputes", { projectId: 1, reason: "r" }, filer());
+        expect(r.status).to.equal(400);
+        expect(r.body.error).to.match(/wallet/i);
+      });
+
+      it("401 when the token's account no longer exists", async function () {
+        supabaseService.findUserByEmail = async () => null;
+        const r = await call("POST", "/api/disputes", { projectId: 1, reason: "r" }, filer());
+        expect(r.status).to.equal(401);
+      });
     });
 
     it("rejects an invalid status", async function () {

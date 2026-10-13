@@ -76,12 +76,12 @@ export const apiClient = {
     }
   },
 
-  async submitDispute(disputeData) {
+  async submitDispute({ token, projectId, reason }) {
     try {
       const res = await fetch(`${API_BASE_URL}/disputes`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(disputeData),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ projectId, reason }),
       });
       return await res.json();
     } catch {
