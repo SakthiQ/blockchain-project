@@ -132,6 +132,29 @@ describe("API routes", function () {
       expect(claims.exp - claims.iat).to.equal(7 * 24 * 3600);
     });
 
+    it("signup refuses to create an admin and never touches the database", async function () {
+      let touched = false;
+      supabaseService.findUserByEmail = async () => { touched = true; return null; };
+      supabaseService.createUser = async () => { touched = true; return {}; };
+      const r = await call("POST", "/api/auth/signup", { name: "Eve", email: "eve@x.io", password: "pw", role: "admin" });
+      expect(r.status).to.equal(403);
+      expect(touched).to.equal(false);
+    });
+
+    it("signup rejects unknown roles", async function () {
+      const r = await call("POST", "/api/auth/signup", { name: "E", email: "e@x.io", password: "pw", role: "superuser" });
+      expect(r.status).to.equal(403);
+    });
+
+    it("signup still allows the judge role", async function () {
+      let saved;
+      supabaseService.findUserByEmail = async () => null;
+      supabaseService.createUser = async (d) => { saved = d; return { id: 2, role: d.role }; };
+      const r = await call("POST", "/api/auth/signup", { name: "J", email: "j@x.io", password: "pw", role: "judge" });
+      expect(r.status).to.equal(201);
+      expect(saved.role).to.equal("judge");
+    });
+
     it("signup returns 500 when the database call fails", async function () {
       supabaseService.findUserByEmail = async () => { throw new Error("db down"); };
       const r = await call("POST", "/api/auth/signup", { name: "A", email: "a@b.c", password: "pw" });

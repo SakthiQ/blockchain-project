@@ -20,6 +20,11 @@ function serializeUser(user) {
   };
 }
 
+// Roles a visitor may claim for themselves. 'admin' is deliberately absent:
+// it gates the status routes, so it is only ever assigned by an operator
+// (the seed script, or directly in Supabase), never through public signup.
+const SELF_SERVICE_ROLES = ['participant', 'judge'];
+
 function issueToken(user) {
   return jwt.sign(
     { id: user.id, role: user.role, email: user.email },
@@ -39,6 +44,13 @@ router.post('/signup', async (req, res) => {
       return res.status(400).json({ error: 'Name, email, and password are required.' });
     }
 
+    const requestedRole = role || 'participant';
+    if (!SELF_SERVICE_ROLES.includes(requestedRole)) {
+      return res.status(403).json({
+        error: 'That role cannot be selected at signup. Choose participant or judge.',
+      });
+    }
+
     const existingUser = await supabaseService.findUserByEmail(email);
     if (existingUser) {
       return res.status(400).json({ error: 'An account with this email address already exists.' });
@@ -50,7 +62,7 @@ router.post('/signup', async (req, res) => {
       name,
       email,
       passwordHash,
-      role: role || 'participant',
+      role: requestedRole,
       bio: bio || '',
       walletAddress: walletAddress || '',
     });
