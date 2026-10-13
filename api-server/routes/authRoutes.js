@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const supabaseService = require('../services/supabaseService');
 const requireSupabase = require('../middleware/requireSupabase');
-const { JWT_SECRET } = require('../middleware/auth');
+const { JWT_SECRET, requireAuth } = require('../middleware/auth');
 
 router.use(requireSupabase);
 
@@ -111,13 +111,12 @@ router.post('/login', async (req, res) => {
 // ──────────────────────────────────────────────────────────────────────────────
 // PUT /api/auth/profile
 // ──────────────────────────────────────────────────────────────────────────────
-router.put('/profile', async (req, res) => {
+router.put('/profile', requireAuth, async (req, res) => {
   try {
-    const { email, name, bio, walletAddress } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ error: 'Email is required to locate user profile.' });
-    }
+    // The account being edited comes from the verified token, never the body,
+    // so a user can only change their own profile.
+    const { email } = req.user;
+    const { name, bio, walletAddress } = req.body;
 
     const updates = {};
     if (name) updates.name = name;

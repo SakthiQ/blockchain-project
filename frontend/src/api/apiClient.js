@@ -32,11 +32,11 @@ export const apiClient = {
     return data;
   },
 
-  async updateProfile({ email, name, bio, walletAddress }) {
+  async updateProfile({ token, name, bio, walletAddress }) {
     const res = await fetch(`${API_BASE_URL}/auth/profile`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name, bio, walletAddress }),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name, bio, walletAddress }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Profile update failed');

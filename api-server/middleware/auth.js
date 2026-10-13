@@ -12,7 +12,7 @@ if (!JWT_SECRET) {
 
 /**
  * Requires a valid `Authorization: Bearer <token>` header whose role is one of
- * `roles`. 401 means "no usable token"; 403 means "valid token, wrong role".
+ * `roles` (any role when none are given). 401 means "no usable token"; 403 means "valid token, wrong role".
  * The verified claims are exposed as `req.user`.
  */
 function requireRole(...roles) {
@@ -29,7 +29,7 @@ function requireRole(...roles) {
       return res.status(401).json({ error: 'Invalid or expired token.' });
     }
 
-    if (!roles.includes(claims.role)) {
+    if (roles.length > 0 && !roles.includes(claims.role)) {
       return res.status(403).json({ error: 'You do not have permission to do this.' });
     }
 
@@ -38,4 +38,7 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { JWT_SECRET, requireRole };
+/** Any signed-in user. */
+const requireAuth = requireRole();
+
+module.exports = { JWT_SECRET, requireRole, requireAuth };

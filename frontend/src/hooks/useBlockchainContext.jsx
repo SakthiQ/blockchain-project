@@ -288,7 +288,7 @@ export function Web3Provider({ children }) {
 
       // Call MongoDB API
       try {
-        await apiClient.signUp({
+        const signUpRes = await apiClient.signUp({
           name,
           email,
           password,
@@ -296,6 +296,7 @@ export function Web3Provider({ children }) {
           bio,
           walletAddress: LOCAL_ACCOUNTS[targetIndex].address
         });
+        newProfile.authToken = signUpRes.token;
       } catch (e) {
         console.warn('MongoDB API sync notice:', e.message);
       }
@@ -327,6 +328,7 @@ export function Web3Provider({ children }) {
             bio: mongoRes.user.bio,
             walletAddress: mongoRes.user.walletAddress || LOCAL_ACCOUNTS[4].address,
             authMethod: 'email',
+            authToken: mongoRes.token,
             createdAt: new Date().toISOString()
           };
         }
@@ -370,8 +372,9 @@ export function Web3Provider({ children }) {
       }
 
       // Async update MongoDB
-      apiClient.updateProfile({
-        email: next.email,
+      // Without a token (offline/demo accounts) there is no server profile to edit.
+      if (next.authToken) apiClient.updateProfile({
+        token: next.authToken,
         name: next.name,
         bio: next.bio,
         walletAddress: next.walletAddress

@@ -191,26 +191,60 @@ describe("API routes", function () {
       expect(jwt.decode(r.body.token).role).to.equal("judge");
     });
 
-    it("profile update requires an email", async function () {
-      const r = await call("PUT", "/api/auth/profile", { name: "X" });
-      expect(r.status).to.equal(400);
-    });
+    describe("profile update", function () {
+      const userAuth = (role = "participant", email = "me@x.io") => ({
+        Authorization: `Bearer ${jwt.sign({ id: 1, role, email }, JWT_SECRET, { expiresIn: "1h" })}`,
+      });
 
-    it("profile update returns 404 for an unknown user", async function () {
-      supabaseService.updateUserByEmail = async () => null;
-      const r = await call("PUT", "/api/auth/profile", { email: "no@x.io", name: "X" });
-      expect(r.status).to.equal(404);
-    });
+      it("401 without a token, and never touches the database", async function () {
+        let called = false;
+        supabaseService.updateUserByEmail = async () => { called = true; return {}; };
+        const r = await call("PUT", "/api/auth/profile", { email: "victim@x.io", name: "X" });
+        expect(r.status).to.equal(401);
+        expect(called).to.equal(false);
+      });
 
-    it("profile update only sends the fields that were provided", async function () {
-      let updates;
-      supabaseService.updateUserByEmail = async (email, u) => {
-        updates = u;
-        return { id: 1, name: "N", email, role: "participant", bio: "", wallet_address: "0x1" };
-      };
-      const r = await call("PUT", "/api/auth/profile", { email: "a@b.c", bio: "", walletAddress: "0x1" });
-      expect(r.status).to.equal(200);
-      expect(updates).to.deep.equal({ bio: "", wallet_address: "0x1" });
+      it("401 for a forged token", async function () {
+        const forged = jwt.sign({ id: 1, role: "admin", email: "a@x.io" }, "wrong");
+        const r = await call("PUT", "/api/auth/profile", { name: "X" }, { Authorization: `Bearer ${forged}` });
+        expect(r.status).to.equal(401);
+      });
+
+      it("edits the token's own account and ignores an email in the body", async function () {
+        let target;
+        supabaseService.updateUserByEmail = async (email) => {
+          target = email;
+          return { id: 1, name: "N", email, role: "participant", bio: "", wallet_address: "" };
+        };
+        const r = await call("PUT", "/api/auth/profile", { email: "victim@x.io", name: "N" }, userAuth("participant", "me@x.io"));
+        expect(r.status).to.equal(200);
+        expect(target).to.equal("me@x.io");
+      });
+
+      it("works for every role", async function () {
+        supabaseService.updateUserByEmail = async (email) => ({ id: 1, email, role: "x" });
+        for (const role of ["participant", "judge", "admin"]) {
+          const r = await call("PUT", "/api/auth/profile", { name: "N" }, userAuth(role));
+          expect(r.status, role).to.equal(200);
+        }
+      });
+
+      it("returns 404 when the account no longer exists", async function () {
+        supabaseService.updateUserByEmail = async () => null;
+        const r = await call("PUT", "/api/auth/profile", { name: "X" }, userAuth());
+        expect(r.status).to.equal(404);
+      });
+
+      it("only sends the fields that were provided", async function () {
+        let updates;
+        supabaseService.updateUserByEmail = async (email, u) => {
+          updates = u;
+          return { id: 1, name: "N", email, role: "participant", bio: "", wallet_address: "0x1" };
+        };
+        const r = await call("PUT", "/api/auth/profile", { bio: "", walletAddress: "0x1" }, userAuth());
+        expect(r.status).to.equal(200);
+        expect(updates).to.deep.equal({ bio: "", wallet_address: "0x1" });
+      });
     });
   });
 
