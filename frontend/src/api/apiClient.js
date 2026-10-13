@@ -32,11 +32,11 @@ export const apiClient = {
     return data;
   },
 
-  async updateProfile({ email, name, bio, walletAddress }) {
+  async updateProfile({ token, name, bio, walletAddress }) {
     const res = await fetch(`${API_BASE_URL}/auth/profile`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name, bio, walletAddress }),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name, bio, walletAddress }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Profile update failed');
@@ -76,12 +76,12 @@ export const apiClient = {
     }
   },
 
-  async submitDispute(disputeData) {
+  async submitDispute({ token, projectId, reason }) {
     try {
       const res = await fetch(`${API_BASE_URL}/disputes`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(disputeData),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ projectId, reason }),
       });
       return await res.json();
     } catch {
@@ -104,9 +104,12 @@ export const apiClient = {
     }
   },
 
-  async invalidateLeaderboardCache() {
+  async invalidateLeaderboardCache(token) {
     try {
-      await fetch(`${API_BASE_URL}/leaderboard/invalidate`, { method: 'POST' });
+      await fetch(`${API_BASE_URL}/leaderboard/invalidate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
     } catch {}
   },
 };

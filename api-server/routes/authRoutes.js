@@ -4,16 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const supabaseService = require('../services/supabaseService');
 const requireSupabase = require('../middleware/requireSupabase');
-
-// A dev-only default keeps `npm run dev` working without a .env, but shipping
-// that literal to production would mean every session token is signed with a
-// value published in this repo.
-const JWT_SECRET = process.env.JWT_SECRET
-  || (process.env.NODE_ENV === 'production' ? null : 'chainjudge_dev_only_secret');
-
-if (!JWT_SECRET) {
-  throw new Error('JWT_SECRET must be set in production.');
-}
+const { JWT_SECRET, requireAuth } = require('../middleware/auth');
 
 router.use(requireSupabase);
 
@@ -28,6 +19,11 @@ function serializeUser(user) {
     walletAddress: user.wallet_address,
   };
 }
+
+// Roles a visitor may claim for themselves. 'admin' is deliberately absent:
+// it gates the status routes, so it is only ever assigned by an operator
+// (the seed script, or directly in Supabase), never through public signup.
+const SELF_SERVICE_ROLES = ['participant', 'judge'];
 
 function issueToken(user) {
   return jwt.sign(
@@ -48,6 +44,13 @@ router.post('/signup', async (req, res) => {
       return res.status(400).json({ error: 'Name, email, and password are required.' });
     }
 
+    const requestedRole = role || 'participant';
+    if (!SELF_SERVICE_ROLES.includes(requestedRole)) {
+      return res.status(403).json({
+        error: 'That role cannot be selected at signup. Choose participant or judge.',
+      });
+    }
+
     const existingUser = await supabaseService.findUserByEmail(email);
     if (existingUser) {
       return res.status(400).json({ error: 'An account with this email address already exists.' });
@@ -59,7 +62,7 @@ router.post('/signup', async (req, res) => {
       name,
       email,
       passwordHash,
-      role: role || 'participant',
+      role: requestedRole,
       bio: bio || '',
       walletAddress: walletAddress || '',
     });
@@ -108,13 +111,12 @@ router.post('/login', async (req, res) => {
 // ──────────────────────────────────────────────────────────────────────────────
 // PUT /api/auth/profile
 // ──────────────────────────────────────────────────────────────────────────────
-router.put('/profile', async (req, res) => {
+router.put('/profile', requireAuth, async (req, res) => {
   try {
-    const { email, name, bio, walletAddress } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ error: 'Email is required to locate user profile.' });
-    }
+    // The account being edited comes from the verified token, never the body,
+    // so a user can only change their own profile.
+    const { email } = req.user;
+    const { name, bio, walletAddress } = req.body;
 
     const updates = {};
     if (name) updates.name = name;

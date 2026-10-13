@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabaseService = require('../services/supabaseService');
 const requireSupabase = require('../middleware/requireSupabase');
+const { requireRole, requireAuth } = require('../middleware/auth');
 
 router.use(requireSupabase);
 
@@ -18,19 +19,29 @@ router.get('/', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// POST /api/disputes — File a new dispute appeal
+// POST /api/disputes — File a new dispute appeal (signed-in users)
 // ──────────────────────────────────────────────────────────────────────────────
-router.post('/', async (req, res) => {
+router.post('/', requireAuth, async (req, res) => {
   try {
-    const { projectId, raisedBy, reason } = req.body;
+    const { projectId, reason } = req.body;
 
-    if (!projectId || !raisedBy || !reason) {
-      return res.status(400).json({ error: 'projectId, raisedBy, and reason are required.' });
+    if (!projectId || !reason) {
+      return res.status(400).json({ error: 'projectId and reason are required.' });
+    }
+
+    // The filer is the signed-in account, never a value from the body, so a
+    // dispute cannot be attributed to someone else's wallet.
+    const user = await supabaseService.findUserByEmail(req.user.email);
+    if (!user) {
+      return res.status(401).json({ error: 'Account not found. Please sign in again.' });
+    }
+    if (!user.wallet_address) {
+      return res.status(400).json({ error: 'Add a wallet address to your profile before filing a dispute.' });
     }
 
     const newDispute = await supabaseService.createDispute({
       projectId: Number(projectId),
-      raisedBy,
+      raisedBy: user.wallet_address,
       reason,
       status: 'Pending',
     });
@@ -45,9 +56,9 @@ router.post('/', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// PUT /api/disputes/:id/status — Resolve or Reject a dispute
+// PUT /api/disputes/:id/status — Resolve or Reject a dispute (admin only)
 // ──────────────────────────────────────────────────────────────────────────────
-router.put('/:id/status', async (req, res) => {
+router.put('/:id/status', requireRole('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
