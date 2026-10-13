@@ -378,7 +378,7 @@ Returns Redis-cached leaderboard JSON. Response includes `X-Cache: HIT` or `X-Ca
 
 #### `POST /api/leaderboard/invalidate`
 
-Flushes `leaderboard:current` Redis key. Called automatically whenever a judge reveals a score.
+Flushes `leaderboard:current` Redis key. Called whenever a judge reveals a score. Requires an `Authorization: Bearer <token>` header from a judge or admin account (401 without a valid token, 403 for participants).
 
 ---
 

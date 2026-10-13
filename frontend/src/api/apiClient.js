@@ -104,9 +104,12 @@ export const apiClient = {
     }
   },
 
-  async invalidateLeaderboardCache() {
+  async invalidateLeaderboardCache(token) {
     try {
-      await fetch(`${API_BASE_URL}/leaderboard/invalidate`, { method: 'POST' });
+      await fetch(`${API_BASE_URL}/leaderboard/invalidate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
     } catch {}
   },
 };

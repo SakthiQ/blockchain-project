@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const cacheService = require('../services/cacheService');
+const { requireRole } = require('../middleware/auth');
 
 const LEADERBOARD_CACHE_KEY = 'leaderboard:current';
 const CACHE_TTL = 30; // 30 seconds TTL
@@ -28,8 +29,8 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST /api/leaderboard/invalidate - Flush leaderboard cache on new ScoreSubmitted event
-router.post('/invalidate', async (req, res) => {
+// POST /api/leaderboard/invalidate - Flush leaderboard cache on new ScoreSubmitted event (judge or admin only)
+router.post('/invalidate', requireRole('judge', 'admin'), async (req, res) => {
   try {
     await cacheService.del(LEADERBOARD_CACHE_KEY);
     res.json({ message: 'Leaderboard cache invalidated.' });

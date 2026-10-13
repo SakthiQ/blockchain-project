@@ -16,7 +16,8 @@ describe("API routes", function () {
 
   const tokenFor = (role, opts = {}) =>
     jwt.sign({ id: 1, role, email: `${role}@x.io` }, JWT_SECRET, { expiresIn: "1h", ...opts });
-  const asAdmin = () => ({ Authorization: `Bearer ${tokenFor("admin")}` });
+  const roleAuth = (role) => ({ Authorization: `Bearer ${tokenFor(role)}` });
+  const asAdmin = () => roleAuth("admin");
 
   const call = async (method, path, body, headers = {}) => {
     const res = await fetch(base + path, {
@@ -415,13 +416,39 @@ describe("API routes", function () {
       expect(r.body.entries).to.deep.equal([]);
     });
 
+    describe("invalidate authorization", function () {
+      beforeEach(async () => { await cacheService.set("leaderboard:current", { entries: [] }, 30); });
+
+      const stillCached = async () => (await cacheService.get("leaderboard:current")) !== null;
+
+      it("401 without a token and leaves the cache alone", async function () {
+        const r = await call("POST", "/api/leaderboard/invalidate");
+        expect(r.status).to.equal(401);
+        expect(await stillCached()).to.equal(true);
+      });
+
+      it("403 for a participant and leaves the cache alone", async function () {
+        const r = await call("POST", "/api/leaderboard/invalidate", undefined, roleAuth("participant"));
+        expect(r.status).to.equal(403);
+        expect(await stillCached()).to.equal(true);
+      });
+
+      for (const role of ["judge", "admin"]) {
+        it(`lets a ${role} flush the cache`, async function () {
+          const r = await call("POST", "/api/leaderboard/invalidate", undefined, roleAuth(role));
+          expect(r.status).to.equal(200);
+          expect(await stillCached()).to.equal(false);
+        });
+      }
+    });
+
     it("returns cached data as a HIT, and invalidate clears it", async function () {
       await cacheService.set("leaderboard:current", { entries: [{ projectId: 1 }] }, 30);
       const hit = await call("GET", "/api/leaderboard");
       expect(hit.headers.get("x-cache")).to.equal("HIT");
       expect(hit.body.entries).to.have.length(1);
 
-      const inv = await call("POST", "/api/leaderboard/invalidate");
+      const inv = await call("POST", "/api/leaderboard/invalidate", undefined, roleAuth("judge"));
       expect(inv.status).to.equal(200);
 
       const after = await call("GET", "/api/leaderboard");
